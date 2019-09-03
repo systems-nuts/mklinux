@@ -11,7 +11,7 @@ EXTRA_CFLAGS := -I$(DOLPHIN)/DIS/src/IRM_GX/drv/src -I$(DOLPHIN)/DIS/src/IRM_GX/
 EXTRA_CFLAGS += -I/opt/DIS/include/  
 EXTRA_CFLAGS +=  -D_DIS_KERNEL_ -D_KERNEL -DOS_IS_LINUX 
 
-KBUILD_EXTRA_SYMBOLS := /home/sunsky/mklinux/msg_layer/Module.symvers
+KBUILD_EXTRA_SYMBOLS := /home/sunsky/weimk/mklinux/msg_layer/Module.symvers
 
 ifeq ($(KERNELRELEASE),)
 
