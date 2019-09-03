@@ -12,7 +12,7 @@
 #include <linux/file.h>
 #include <linux/ktime.h>
 
-#include <linux/pcn_kmsg.h>
+#include "linux/pcn_kmsg.h"
 
 #include <linux/fdtable.h>
 
@@ -28,11 +28,12 @@
 #include <asm/atomic.h>
 #include <linux/completion.h>
 
-#include <popcorn/init.h>
+#include "popcorn/init.h"
 #include <linux/cpumask.h>
 #include <linux/sched.h>
-
+#include <linux/moduleparam.h>
 #include "genif.h"
+
 
 /* Macro definitions */
 #define MAX_NUM_CHANNELS 	1
@@ -44,17 +45,16 @@
 #define TARGET_NODE		8
 #endif
 #define NO_FLAGS		0
-#define SEG_SIZE		20000
+#define SEG_SIZE		4194304
 #define MAX_NUM_BUF		20
 #define RECV_THREAD_POOL	2
 
-#define ENABLE_DMA		0
+#define ENABLE_DMA		1
 #define SEND_QUEUE_POOL		0
 
 /* for debug */
-#define TEST_MSG_LAYER 		0
+#define TEST_MSG_LAYER 	        1 
 #define TEST_SERVER		1
-
 typedef struct _pool_buffer{
 	char* buff;
 	int is_free;
@@ -166,10 +166,10 @@ extern send_cbftn send_callback;
 
 #if TEST_MSG_LAYER
 
-#define MSG_LENGTH 4096
+#define MSG_LENGTH 64
 #define NUM_MSGS 25
 
-#define PROF_HISTOGRAM  1
+#define PROF_HISTOGRAM  0
 
 static atomic_t recv_count;
 static atomic_t exec_count;
@@ -184,8 +184,20 @@ struct semaphore recv_buf_cnt;
 struct test_msg_t
 {
 	struct pcn_kmsg_hdr hdr;
-	unsigned char payload[MSG_LENGTH];
+	//unsigned char payload[MSG_LENGTH];
+	unsigned char payload[2097152];
 };
+
+static int cbi=0;
+/* for input parameter from outside*/
+
+static int paysize =0;
+module_param(paysize, int, 0);
+
+
+
+
+
 
 static int test_thread(void* arg0);
 struct task_struct *test_handler;
@@ -345,7 +357,9 @@ signed32 recv_intr_cb (unsigned32 local_adapter_number,
                        void *arg, unsigned32 interrupt_number)
 {
 	int i =0;
-
+        ktime_t cbend, cbstart;
+        printk(" recv callback In %s: \n", __func__);
+        cbstart = ktime_get();
 	for (i = 0;  i<MAX_NUM_CHANNELS; i++) {
 		if (interrupt_number == local_recv_intr_no[i]) {
 			//printk("Remote recv interrupt for %d %d\n", i, interrupt_number);
@@ -353,6 +367,10 @@ signed32 recv_intr_cb (unsigned32 local_adapter_number,
 			break;
 		}
 	}
+        cbend = ktime_get();
+         int  average = (ktime_to_ns(ktime_sub(cbend,cbstart)))/1000;
+         printk("rcv callback time for msg = %lld,  times: %d\n", average, cbi);
+         cbi++;
 	return 0;
 }
 
@@ -432,13 +450,13 @@ static send_wait * dq_send(void)
 
 
 // Initialize callback table to null, set up control and data channels
-int __init initialize()
+int __init initialize(void)
 {
 	int status = 0, i = 0, j = 0; 
 	recv_data_t* recv_data;
 	struct sched_param param = {.sched_priority = 10};
 
-	printk("MSG_LAYER: Initialization\n");
+	printk(KERN_ALERT "MSG_LAYER: Initialization\n");
 
 #if SEND_QUEUE_POOL
 	for (i = 0; i<MAX_NUM_CHANNELS; i++) {
@@ -463,7 +481,7 @@ int __init initialize()
 		send_buf[i].status = 0;
 		smp_wmb();
 
-		printk("allocated buffer %p\n", send_buf[i].buff);
+		printk(KERN_EMERG "allocated send buffer   %p\n", send_buf[i].buff);
 	}
 
 	sema_init(&pool_buf_cnt, MAX_NUM_BUF);
@@ -480,7 +498,7 @@ int __init initialize()
 		recv_buf[i].is_free = 1;
 		smp_wmb();
 
-		printk("allocated buffer %p\n", recv_buf[i].buff);
+		printk("allocated recv buffer  %p\n", recv_buf[i].buff);
 	}
 
 	sema_init(&recv_buf_cnt, MAX_NUM_BUF);
@@ -610,13 +628,27 @@ ktime_t end[(NUM_MSGS*MAX_NUM_CHANNELS)+1];
 unsigned long long time[(NUM_MSGS*MAX_NUM_CHANNELS)+1];
 #else
 ktime_t start, end;
+ktime_t starts, ends;
+ktime_t rstart, rend;
+ktime_t tstart, tend;
+ktime_t istart, iend;
+ktime_t eqstart, eqend;
+ktime_t fstart, fend;
+ktime_t dstart, dend;
+static int ai=0;
+static int iai=0;
+static int aii=0;
+static int ei=0;
+static int di=0;
+static int fi=0;
 static int time_started = 0;
 #endif
 
 pcn_kmsg_cbftn handle_selfie_test(struct pcn_kmsg_message* inc_msg)
 {
 #if !TEST_SERVER
-	int payload_size = MSG_LENGTH;
+	//int payload_size = MSG_LENGTH;
+	int payload_size = paysize;
 
 	pci_kmsg_send_long(1,(struct pcn_kmsg_long_message*)inc_msg, payload_size);
 #endif
@@ -638,11 +670,12 @@ int test_thread(void* arg0)
 	msleep(1000);
 
 	struct test_msg_t *msg;
-	int payload_size = MSG_LENGTH;
+	//int payload_size = MSG_LENGTH;
+	int payload_size = paysize;
 
 	msg = (struct test_msg_t *) vmalloc(sizeof(struct test_msg_t));
 	msg->hdr.type= PCN_KMSG_TYPE_SELFIE_TEST;
-	memset(msg->payload,'b',payload_size);
+	memset(msg->payload,'f',payload_size);
 
 #if !PROF_HISTOGRAM
 	if (time_started == 0) {
@@ -658,7 +691,16 @@ int test_thread(void* arg0)
 
 		//printk("start_time = %lld\n", ktime_to_ns(start[temp_count]));
 #endif
-		pci_kmsg_send_long(1,(struct pcn_kmsg_long_message*)msg, payload_size);
+		starts = ktime_get();
+                pci_kmsg_send_long(1,(struct pcn_kmsg_long_message*)msg, payload_size);
+
+                ends = ktime_get();
+
+              int  average = (ktime_to_ns(ktime_sub(ends,starts)))/1000;
+                printk("send time for msg = %lld,  times: %d\n", average, i);
+
+
+
 
 		if (!(i%(NUM_MSGS/5))) {
 			//printk("scheduling out\n");
@@ -715,11 +757,20 @@ int send_thread(int arg0)
 		if (send_data == NULL) {
 			printk("send queue is empty\n");
 			continue;
+                       // break;
 		}
 
 		pcn_msg = (struct pcn_kmsg_message*) send_data->msg;
+       
+               istart = ktime_get();                 
 
-		wait_for_completion(&send_intr_flag[channel_num]);
+	       wait_for_completion(&send_intr_flag[channel_num]);
+
+               iend   = ktime_get();
+               int intersend = (ktime_to_ns(ktime_sub(iend,istart)))/1000;
+               printk("send wait complete internal time = %lld  round: %d\n", intersend, aii);
+
+               aii++;
 
 #if ENABLE_DMA
 		memcpy(send_vaddr[channel_num], pcn_msg, pcn_msg->hdr.size);
@@ -788,7 +839,7 @@ int connection_handler(void* arg0)
 	thread_data = arg0;
 	channel_num = thread_data->channel_num;
 
-	msleep(100);
+//	msleep(100);
 	printk("%s: INFO: Channel  %d %d\n", thread_data->channel_num, thread_data->is_worker);
 	if (thread_data->is_worker == 0) {
 		printk("%s: INFO: Initializing recv channel %d\n", __func__, channel_num);
@@ -811,7 +862,13 @@ int connection_handler(void* arg0)
 		}
 
 		/* Wait on remote to complete using the channel */
-		wait_for_completion(&recv_intr_flag[channel_num]);
+		tstart = ktime_get();
+                wait_for_completion(&recv_intr_flag[channel_num]);
+                tend = ktime_get();
+                int internal = (ktime_to_ns(ktime_sub(tend,tstart)))/1000;
+                printk("recv wait complete internal time = %lld  round: %d\n", internal, ai);
+                  
+                ai++;
 		/* Ajith :  the wait for completion will wake up only one thread on interrupt callback */
 
 #if TEST_MSG_LAYER
@@ -830,6 +887,7 @@ int connection_handler(void* arg0)
 			printk("Receive message: %d (%s)\n", temp->hdr.type, msg_names[temp->hdr.type]);*/
 
 #if TEST_MSG_LAYER
+                rstart = ktime_get();
 		down_interruptible(&recv_buf_cnt);
 do_retry:
 		for (i = 0; i<MAX_NUM_BUF; i++) {
@@ -852,6 +910,10 @@ do_retry:
 		}
 
 		pcn_msg = recv_buf[i].buff;
+                rend = ktime_get();
+                int rinternal = (ktime_to_ns(ktime_sub(rend,rstart)))/1000;
+                printk("recv wait interrupt internal time = %lld  round: %d\n", rinternal, iai);
+                iai++;
 #else
 do_retry:
 		pcn_msg = (struct pcn_kmsg_message *) vmalloc(temp->hdr.size);
@@ -936,10 +998,13 @@ do_retry:
 		if (atomic_read(&exec_count) == (NUM_MSGS*MAX_NUM_CHANNELS)) {
 			end = ktime_get();
 
-			average = ktime_to_ns(ktime_sub(end,start)) >> 10;		
+			average = ktime_to_ns(ktime_sub(end,start));	
+                        printk("total time before for msg = %lld\n", average);	
+			average = (ktime_to_ns(ktime_sub(end,start)))/1000;	
+                        printk("total time for msg = %lld\n", average);	
 			average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
 
-			printk("Average time for sending msg = %lld\n", average); 
+			printk("Average time for sending msg = %lld  payload size = %d\n", average, paysize); 
 
 		}
 #endif
@@ -1034,8 +1099,13 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_long_message *lmsg
 		return -1;
 	}
 
+        dstart = ktime_get();
 	down_interruptible(&pool_buf_cnt); // released in the sender thread, it blocks all possible other senders
-
+        dend  = ktime_get();
+        int daverage = (ktime_to_ns(ktime_sub(dend,dstart)))/1000;
+        printk("kmsg down interrupt time for msg = %lld, round = %d\n", daverage, di);
+        di++;
+        fstart = ktime_get();
 do_retry:
 	for (i = 0; i<MAX_NUM_BUF; i++) {
 		if ( atomic_cmpxchg( ((atomic_t *) &send_buf[i].is_free), 1, 0) == 1 ) {
@@ -1059,7 +1129,10 @@ do_retry:
 		retry++;
 		goto do_retry;
        }
-
+       fend = ktime_get();
+       int faverage = (ktime_to_ns(ktime_sub(fend,fstart)))/1000;
+        printk("kmsg buffer time for msg = %lld, round = %d\n", faverage, fi);
+        fi++;
 	send_data->assoc_buf = &send_buf[i];
 	send_data->assoc_buf->status = 0;
 	send_data->msg=send_buf[i].buff;
@@ -1072,7 +1145,12 @@ do_retry:
 	channel_select = atomic_inc_return(&send_channel)%MAX_NUM_CHANNELS;
 	enq_send(send_data, channel_select);
 #else
+        eqstart = ktime_get(); 
 	enq_send(send_data);
+        eqend = ktime_get();
+       int eaverage = (ktime_to_ns(ktime_sub(eqend,eqstart)))/1000;
+        printk("kmsg enqueue time for msg = %lld, round = %d\n", eaverage, ei);
+        ei++;
 	send_data->assoc_buf->status = 1;
 #endif
 
@@ -1094,7 +1172,7 @@ static int pcie_send_init(int channel_num)
 	status = sci_query_adapter_number(local_adapter_number, Q_ADAPTER_NODE_ID,
 					NO_FLAGS, &value);
 	if (status != 0) {
-                printk(" Error in sci_create_segment: %d\n", status);
+                printk(" Error in sci_query_adapter_number: %d\n", status);
         } else {
 		printk(" adapter number = %d\n", value);
 	}
@@ -1497,11 +1575,12 @@ static int dma_cleanup(int channel_num)
 
 
 
-static void __exit unload(void)
+//static void __exit unload(void)
+static void unload(void)
 {
 	int status = 0, i = 0, j = 0;
 
-	printk("Stopping kernel threads\n");
+	printk(KERN_ALERT "Stopping kernel threads\n");
 
 	/* To move out of recv_queue*/
 	for (i = 0; i<MAX_NUM_CHANNELS; i++) {
@@ -1543,11 +1622,18 @@ static void __exit unload(void)
 #endif
 
 	}
-
 	sci_terminate(module_id);	
 
-	printk("Successfully unloaded module\n");
+	printk(KERN_INFO "Successfully unloaded module\n");
 }
+//static int init(void)
+//{ printk(KERN_INFO "hello\n"); return 0; }
+//static void exit(void)
+//{printk(KERN_INFO "BYE\n"); }
+
+//module_init(init);
+//module_exit(exit);
+
 
 module_init(initialize);
 module_exit(unload);
