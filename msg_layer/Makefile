@@ -5,13 +5,13 @@
 # This conditional selects whether we are being included from the
 # kernel Makefile or not.
 
-DOLPHIN := /home/vincent/dolphin
+DOLPHIN := /opt/DIS
 
-EXTRA_CFLAGS := -I$(DOLPHIN)/DIS/src/IRM_GX/drv/src -I$(DOLPHIN)/DIS/src/IRM_GX/drv/src/LINUX -I$(DOLPHIN)/DIS/src/COMMON/osif/kernel/include -I$(DOLPHIN)/DIS/src/COMMON/osif/kernel/include/LINUX -I$(DOLPHIN)/DIS/src/include/ -I$(DOLPHIN)/DIS/src/include/dis/
-EXTRA_CFLAGS += -I/opt/DIS/include/ 
-EXTRA_CFLAGS += -D_KERNEL -DOS_IS_LINUX
+EXTRA_CFLAGS := -I$(DOLPHIN)/DIS/src/IRM_GX/drv/src -I$(DOLPHIN)/DIS/src/IRM_GX/drv/src/LINUX -I$(DOLPHIN)/DIS/src/COMMON/osif/kernel/include -I$(DOLPHIN)/DIS/src/COMMON/osif/kernel/include/LINUX -I$(DOLPHIN)/DIS/src/include/ -I$(DOLPHIN)/DIS/src/include/dis/ -I/home/sunsky/mklinux/include/  
+EXTRA_CFLAGS += -I/opt/DIS/include/  
+EXTRA_CFLAGS +=  -D_DIS_KERNEL_ -D_KERNEL -DOS_IS_LINUX 
 
-KBUILD_EXTRA_SYMBOLS := $(DOLPHIN)/msg_layer/Module.symvers
+KBUILD_EXTRA_SYMBOLS := /home/sunsky/mklinux/msg_layer/Module.symvers
 
 ifeq ($(KERNELRELEASE),)
 
@@ -28,13 +28,14 @@ modules_install:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules_install
 
 clean:
-	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions Module.symvers modules.order
+	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions modules.order
 
 .PHONY: modules modules_install clean
 
 else
     # called from kernel build system: just declare what our modules are
-    obj-m := msg_layer.o
+    obj-m += msg_layer.o
+ #   msg_layer-y := pcn_kmsg.o 
 endif
 
 
