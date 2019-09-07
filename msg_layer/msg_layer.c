@@ -49,7 +49,7 @@
 #define MAX_NUM_BUF		20
 #define RECV_THREAD_POOL	2
 
-#define ENABLE_DMA		1
+#define ENABLE_DMA		0
 #define SEND_QUEUE_POOL		0
 
 /* for debug */
@@ -196,7 +196,7 @@ module_param(paysize, int, 0);
 
 
 
-
+ktime_t cbstart[25], cbend[25];
 
 
 static int test_thread(void* arg0);
@@ -303,7 +303,7 @@ int send_connect_cbfunc(void *arg,
                         unsigned32 status)
 {
 	int i = 0;
-
+        printk("send_connect_cb\n");
 	if (status == 0) {
                 for (i = 0; i<MAX_NUM_CHANNELS; i++) {
                         if (remote_recv_seg_hdl[i] == remote_segment_handle) {
@@ -322,6 +322,8 @@ int recv_connect_cbfunc(void *arg,
                         unsigned32 reason,
                         unsigned32 status)
 {
+
+        printk("recv_connect_cb\n");
 	int i = 0;
 
 	if (status == 0) {
@@ -341,11 +343,13 @@ int recv_connect_cbfunc(void *arg,
 signed32 send_intr_cb (unsigned32 local_adapter_number,
                        void *arg, unsigned32 interrupt_number)
 {
+        printk("send_intr_cb\n");
+
 	int i =0;
 
 	for (i = 0;  i<MAX_NUM_CHANNELS; i++) {
 		if (interrupt_number == local_send_intr_no[i]) {
-			//printk("Remote send interrupt for %d %d\n", i, interrupt_number);
+			printk("Remote send interrupt for %d %d\n", i, interrupt_number);
 			complete(&send_intr_flag[i]);
 			break;
 		}
@@ -356,20 +360,18 @@ signed32 send_intr_cb (unsigned32 local_adapter_number,
 signed32 recv_intr_cb (unsigned32 local_adapter_number,
                        void *arg, unsigned32 interrupt_number)
 {
+
+        printk("recv_intr_cb\n");
 	int i =0;
-        ktime_t cbend, cbstart;
-        printk(" recv callback In %s: \n", __func__);
-        cbstart = ktime_get();
+        cbstart[cbi] = ktime_get();
 	for (i = 0;  i<MAX_NUM_CHANNELS; i++) {
 		if (interrupt_number == local_recv_intr_no[i]) {
-			//printk("Remote recv interrupt for %d %d\n", i, interrupt_number);
+			printk("Remote recv interrupt for %d %d\n", i, interrupt_number);
 			complete(&recv_intr_flag[i]);
 			break;
 		}
 	}
-        cbend = ktime_get();
-         int  average = (ktime_to_ns(ktime_sub(cbend,cbstart)))/1000;
-         printk("rcv callback time for msg = %lld,  times: %d\n", average, cbi);
+        cbend[cbi] = ktime_get();
          cbi++;
 	return 0;
 }
@@ -423,6 +425,7 @@ static send_wait * dq_send(int index)
 #else
 static void enq_send(send_wait *strc)
 {
+        printk("enq_send\n");
 	spin_lock(&send_q_mutex);
 	INIT_LIST_HEAD(&(strc->list));
 	list_add_tail(&(strc->list), &(send_wait_q.list));
@@ -432,6 +435,8 @@ static void enq_send(send_wait *strc)
 
 static send_wait * dq_send(void)
 {
+        printk("dq_send\n");
+
 	send_wait *tmp;
 	wait_for_completion(&send_q_empty);
 	spin_lock(&send_q_mutex);
@@ -628,19 +633,25 @@ ktime_t end[(NUM_MSGS*MAX_NUM_CHANNELS)+1];
 unsigned long long time[(NUM_MSGS*MAX_NUM_CHANNELS)+1];
 #else
 ktime_t start, end;
-ktime_t starts, ends;
-ktime_t rstart, rend;
-ktime_t tstart, tend;
-ktime_t istart, iend;
-ktime_t eqstart, eqend;
-ktime_t fstart, fend;
-ktime_t dstart, dend;
+ktime_t starts[25], ends[25];
+ktime_t rstart[25], rend[25];
+ktime_t tstart[25], tend[25];
+ktime_t istart[25], iend[25];
+ktime_t eqstart[25], eqend[25];
+ktime_t dqstart[25], dqend[25];
+ktime_t fstart[25], fend[25];
+ktime_t dstart[25], dend[25];
+ktime_t mcstart[25], mcend[25], triend[25], tristart[25], rcvstart[25], rcvend[25];
 static int ai=0;
 static int iai=0;
 static int aii=0;
 static int ei=0;
 static int di=0;
 static int fi=0;
+static int dqi=0;
+static int tri=0;
+static int mci=0;
+static int rri=0;
 static int time_started = 0;
 #endif
 
@@ -691,14 +702,10 @@ int test_thread(void* arg0)
 
 		//printk("start_time = %lld\n", ktime_to_ns(start[temp_count]));
 #endif
-		starts = ktime_get();
+		starts[i] = ktime_get();
                 pci_kmsg_send_long(1,(struct pcn_kmsg_long_message*)msg, payload_size);
 
-                ends = ktime_get();
-
-              int  average = (ktime_to_ns(ktime_sub(ends,starts)))/1000;
-                printk("send time for msg = %lld,  times: %d\n", average, i);
-
+                ends[i] = ktime_get();
 
 
 
@@ -746,7 +753,10 @@ int send_thread(int arg0)
 #if SEND_QUEUE_POOL
 		send_data = dq_send(channel_num);
 #else
+                dqstart[dqi] = ktime_get();
 		send_data = dq_send();
+                dqend[dqi] = ktime_get();
+                dqi++;
 #endif
 
 #if TEST_MSG_LAYER
@@ -756,22 +766,20 @@ int send_thread(int arg0)
 
 		if (send_data == NULL) {
 			printk("send queue is empty\n");
-			continue;
-                       // break;
+			//continue;
+                        break;
 		}
 
 		pcn_msg = (struct pcn_kmsg_message*) send_data->msg;
        
-               istart = ktime_get();                 
-
+               istart[aii] = ktime_get();                 
+               printk("wait for completion send_intr_cb\n");
 	       wait_for_completion(&send_intr_flag[channel_num]);
 
-               iend   = ktime_get();
-               int intersend = (ktime_to_ns(ktime_sub(iend,istart)))/1000;
-               printk("send wait complete internal time = %lld  round: %d\n", intersend, aii);
+               iend[aii]   = ktime_get();
 
                aii++;
-
+               mcstart[mci] = ktime_get();
 #if ENABLE_DMA
 		memcpy(send_vaddr[channel_num], pcn_msg, pcn_msg->hdr.size);
 
@@ -787,10 +795,16 @@ int send_thread(int arg0)
 		/*check whether remote is using the channel */
 		memcpy(send_remote_vaddr[channel_num], pcn_msg, pcn_msg->hdr.size);
 #endif
-
+                mcend[mci] = ktime_get();
+                mci++;
+              
+                tristart[tri] = ktime_get();  
 	        /* trigger the interrupt */
+               printk("send trigger interrupt\n");
 		status = sci_trigger_interrupt_flag(remote_recv_intr_hdl[channel_num],
 			                        NO_FLAGS);
+                triend[tri] = ktime_get();
+                tri++;
 		if (status != 0) {
 			printk("%s: ERROR: in sci_trigger_interrupt_flag: %d\n", __func__, status);
 		}
@@ -826,7 +840,7 @@ static int connection_handler_cnt = 0;
 int connection_handler(void* arg0)
 {
 	struct pcn_kmsg_message *pcn_msg, *temp;
-	int status = 0, i = 0, channel_num = 0, retry =0;
+	int status = 0, i = 0, channel_num = 0, retry =0,  f=0;
 	unsigned long long average = 0;
 	pcn_kmsg_cbftn ftn;
 	recv_data_t* thread_data;
@@ -862,11 +876,10 @@ int connection_handler(void* arg0)
 		}
 
 		/* Wait on remote to complete using the channel */
-		tstart = ktime_get();
+		tstart[ai] = ktime_get();
+                printk("recv wait for completion_intr_cb\n");
                 wait_for_completion(&recv_intr_flag[channel_num]);
-                tend = ktime_get();
-                int internal = (ktime_to_ns(ktime_sub(tend,tstart)))/1000;
-                printk("recv wait complete internal time = %lld  round: %d\n", internal, ai);
+                tend[ai] = ktime_get();
                   
                 ai++;
 		/* Ajith :  the wait for completion will wake up only one thread on interrupt callback */
@@ -887,7 +900,8 @@ int connection_handler(void* arg0)
 			printk("Receive message: %d (%s)\n", temp->hdr.type, msg_names[temp->hdr.type]);*/
 
 #if TEST_MSG_LAYER
-                rstart = ktime_get();
+                rstart[iai] = ktime_get();
+                printk("down interrupt recv buf cnt\n");
 		down_interruptible(&recv_buf_cnt);
 do_retry:
 		for (i = 0; i<MAX_NUM_BUF; i++) {
@@ -910,9 +924,7 @@ do_retry:
 		}
 
 		pcn_msg = recv_buf[i].buff;
-                rend = ktime_get();
-                int rinternal = (ktime_to_ns(ktime_sub(rend,rstart)))/1000;
-                printk("recv wait interrupt internal time = %lld  round: %d\n", rinternal, iai);
+                rend[iai] = ktime_get();
                 iai++;
 #else
 do_retry:
@@ -924,10 +936,12 @@ do_retry:
 			goto do_retry;
 		}
 #endif
-
+                rcvstart[rri] = ktime_get();
 		memcpy(pcn_msg, recv_vaddr[channel_num], temp->hdr.size);
-
+                rcvend[rri] = ktime_get();
+                rri++;
 	       /* trigger the interrupt */
+                printk("recv trigger the interrupt\n");
 		status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num],
 		                                NO_FLAGS);
 		if (status != 0) {
@@ -1007,6 +1021,7 @@ do_retry:
 			printk("Average time for sending msg = %lld  payload size = %d\n", average, paysize); 
 
 		}
+
 #endif
 #endif /*TEST_MSG_LAYER*/ 
 	}
@@ -1099,13 +1114,12 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_long_message *lmsg
 		return -1;
 	}
 
-        dstart = ktime_get();
+        dstart[di] = ktime_get();
+        printk("down interrrupt pool_buf_cnt\n");
 	down_interruptible(&pool_buf_cnt); // released in the sender thread, it blocks all possible other senders
-        dend  = ktime_get();
-        int daverage = (ktime_to_ns(ktime_sub(dend,dstart)))/1000;
-        printk("kmsg down interrupt time for msg = %lld, round = %d\n", daverage, di);
+        dend[di]  = ktime_get();
         di++;
-        fstart = ktime_get();
+        fstart[fi] = ktime_get();
 do_retry:
 	for (i = 0; i<MAX_NUM_BUF; i++) {
 		if ( atomic_cmpxchg( ((atomic_t *) &send_buf[i].is_free), 1, 0) == 1 ) {
@@ -1129,9 +1143,7 @@ do_retry:
 		retry++;
 		goto do_retry;
        }
-       fend = ktime_get();
-       int faverage = (ktime_to_ns(ktime_sub(fend,fstart)))/1000;
-        printk("kmsg buffer time for msg = %lld, round = %d\n", faverage, fi);
+       fend[fi] = ktime_get();
         fi++;
 	send_data->assoc_buf = &send_buf[i];
 	send_data->assoc_buf->status = 0;
@@ -1145,11 +1157,10 @@ do_retry:
 	channel_select = atomic_inc_return(&send_channel)%MAX_NUM_CHANNELS;
 	enq_send(send_data, channel_select);
 #else
-        eqstart = ktime_get(); 
+        printk("recv enq data\n");
+        eqstart[ei] = ktime_get(); 
 	enq_send(send_data);
-        eqend = ktime_get();
-       int eaverage = (ktime_to_ns(ktime_sub(eqend,eqstart)))/1000;
-        printk("kmsg enqueue time for msg = %lld, round = %d\n", eaverage, ei);
+        eqend[ei] = ktime_get();
         ei++;
 	send_data->assoc_buf->status = 1;
 #endif
@@ -1220,6 +1231,7 @@ static int pcie_send_init(int channel_num)
 
 
 	/* Create and initialize iterrupt */
+        printk("Create and initialize iterrupt\n");
 	status = sci_allocate_interrupt_flag(send_binding[channel_num], local_adapter_number,
                                   0, NO_FLAGS, send_intr_cb ,
                                   NULL, &local_send_intr_hdl[channel_num]);
@@ -1361,6 +1373,7 @@ static int pcie_recv_init(int channel_num)
 
 
 	/* Create and initialize iterrupt */
+        printk("recv Create and initialize iterrupt\n");
 	status = sci_allocate_interrupt_flag(recv_binding[channel_num], local_adapter_number,
                                   0, NO_FLAGS, recv_intr_cb ,
                                   NULL, &local_recv_intr_hdl[channel_num]);
@@ -1578,7 +1591,7 @@ static int dma_cleanup(int channel_num)
 //static void __exit unload(void)
 static void unload(void)
 {
-	int status = 0, i = 0, j = 0;
+	int status = 0, i = 0, j = 0, f=0;
 
 	printk(KERN_ALERT "Stopping kernel threads\n");
 
@@ -1622,6 +1635,53 @@ static void unload(void)
 #endif
 
 	}
+         for (f =0; f<25; f++)
+                        {
+
+                          int  a = (ktime_to_ns(ktime_sub(ends[f],starts[f])))/1000;
+                          printk("send time for msg = %lld,  times: %d\n", a, f);
+
+
+                          a = (ktime_to_ns(ktime_sub(iend[f],istart[f])))/1000;
+                          printk("send wait complete internal time = %lld  round: %d\n", a, f);
+
+
+                          a = (ktime_to_ns(ktime_sub(tend[f],tstart[f])))/1000;
+                          printk("recv wait complete internal time = %lld  round: %d\n", a, f);
+
+
+                          a = (ktime_to_ns(ktime_sub(rend[f],rstart[f])))/1000;
+                          printk("recv wait interrupt internal time = %lld  round: %d\n", a, f);
+
+
+                          a = (ktime_to_ns(ktime_sub(eqend[f],eqstart[f])))/1000;
+                          printk("kmsg enqueue time for msg = %lld, round = %d\n", a, f);
+
+                          a = (ktime_to_ns(ktime_sub(fend[f], fstart[f])))/1000;
+                          printk("kmsg buffer time for msg = %lld, round = %d\n", a, f);
+
+                          a = (ktime_to_ns(ktime_sub(dend[f],dstart[f])))/1000;
+                          printk("kmsg down interrupt time for msg = %lld, round = %d\n", a, f);
+
+                          a = (ktime_to_ns(ktime_sub(mcend[f],mcstart[f])))/1000;
+                          printk("Send memory copy time for msg = %lld, round = %d\n", a, f);
+
+
+                          a = (ktime_to_ns(ktime_sub(triend[f],tristart[f])))/1000;
+                          printk("Send trigger interrupt time for msg = %lld, round = %d\n", a, f);
+
+                          a = (ktime_to_ns(ktime_sub(cbend[f],cbstart[f])))/1000;
+                          printk("rcv callback time for msg = %lld,  times: %d\n", a, f);
+                            
+                          a = (ktime_to_ns(ktime_sub(rcvend[f],rcvstart[f])))/1000;
+                          printk("rcv read memory time for msg = %lld,  times: %d\n", a, f);
+ 
+                          a = (ktime_to_ns(ktime_sub(dqend[f],dqstart[f])))/1000;
+                          printk("Wait for data to send  time for msg = %lld,  times: %d\n", a, f);
+
+
+                        }
+
 	sci_terminate(module_id);	
 
 	printk(KERN_INFO "Successfully unloaded module\n");
