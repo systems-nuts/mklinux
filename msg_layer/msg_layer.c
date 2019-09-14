@@ -12,7 +12,7 @@
 #include <linux/file.h>
 #include <linux/ktime.h>
 
-#include "linux/pcn_kmsg.h"
+#include <linux/pcn_kmsg.h>
 
 #include <linux/fdtable.h>
 
@@ -28,13 +28,13 @@
 #include <asm/atomic.h>
 #include <linux/completion.h>
 
-#include "popcorn/init.h"
+#include <popcorn/init.h>
 #include <linux/cpumask.h>
 #include <linux/sched.h>
 #include <linux/moduleparam.h>
 #include <linux/vmalloc.h>
-#include "genif.h"
 
+#include "genif.h"
 
 /* Macro definitions */
 #define MAX_NUM_CHANNELS 	1
@@ -46,7 +46,7 @@
 #define TARGET_NODE		8
 #endif
 #define NO_FLAGS		0
-#define SEG_SIZE		4194304
+#define SEG_SIZE		4500
 #define MAX_NUM_BUF		20
 #define RECV_THREAD_POOL	2
 
@@ -54,8 +54,9 @@
 #define SEND_QUEUE_POOL		0
 
 /* for debug */
-#define TEST_MSG_LAYER 	        1 
+#define TEST_MSG_LAYER 		1
 #define TEST_SERVER		0
+
 typedef struct _pool_buffer{
 	char* buff;
 	int is_free;
@@ -75,6 +76,14 @@ typedef struct _recv_data{
 	int channel_num;
 	int is_worker;
 }recv_data_t;
+
+/* for input parameter from outside*/
+static int paysize =0;
+static int segsize=0;
+module_param(paysize, int, 0);
+module_param(segsize, int, 0);
+
+
 
 
 static int connection_handler(void* arg0);
@@ -167,7 +176,7 @@ extern send_cbftn send_callback;
 
 #if TEST_MSG_LAYER
 
-#define MSG_LENGTH 64
+#define MSG_LENGTH 4096
 #define NUM_MSGS 25
 
 #define PROF_HISTOGRAM  0
@@ -185,20 +194,9 @@ struct semaphore recv_buf_cnt;
 struct test_msg_t
 {
 	struct pcn_kmsg_hdr hdr;
-	//unsigned char payload[MSG_LENGTH];
-	unsigned char payload[2097152];
+	unsigned char payload[MSG_LENGTH];
+//	unsigned char payload[2097152];
 };
-
-static int cbi=0;
-/* for input parameter from outside*/
-
-static int paysize =0;
-module_param(paysize, int, 0);
-
-
-
-ktime_t cbstart[25], cbend[25];
-
 
 static int test_thread(void* arg0);
 struct task_struct *test_handler;
@@ -304,11 +302,11 @@ int send_connect_cbfunc(void *arg,
                         unsigned32 status)
 {
 	int i = 0;
-       // printk("send_connect_cb\n");
+
 	if (status == 0) {
                 for (i = 0; i<MAX_NUM_CHANNELS; i++) {
                         if (remote_recv_seg_hdl[i] == remote_segment_handle) {
-	//			printk("Reason = %d, status = %d for %d\n", reason, status, i);
+				printk("Reason = %d, status = %d for %d\n", reason, status, i);
                                 send_connected_flag[i] = 1;
 				break;
 			}
@@ -323,14 +321,12 @@ int recv_connect_cbfunc(void *arg,
                         unsigned32 reason,
                         unsigned32 status)
 {
-
-        //printk("recv_connect_cb\n");
 	int i = 0;
 
 	if (status == 0) {
 		for (i = 0; i<MAX_NUM_CHANNELS; i++) {
 			if (remote_send_seg_hdl[i] == remote_segment_handle) {
-	//			printk("Reason = %d, status = %d for %d\n", reason, status, i);
+				printk("Reason = %d, status = %d for %d\n", reason, status, i);
 				recv_connected_flag[i] = 1;
 				break;
 			}
@@ -344,13 +340,11 @@ int recv_connect_cbfunc(void *arg,
 signed32 send_intr_cb (unsigned32 local_adapter_number,
                        void *arg, unsigned32 interrupt_number)
 {
-        //printk("send_intr_cb\n");
-
 	int i =0;
 
 	for (i = 0;  i<MAX_NUM_CHANNELS; i++) {
 		if (interrupt_number == local_send_intr_no[i]) {
-	//		printk("Remote send interrupt for %d %d\n", i, interrupt_number);
+			//printk("Remote send interrupt for %d %d\n", i, interrupt_number);
 			complete(&send_intr_flag[i]);
 			break;
 		}
@@ -361,19 +355,15 @@ signed32 send_intr_cb (unsigned32 local_adapter_number,
 signed32 recv_intr_cb (unsigned32 local_adapter_number,
                        void *arg, unsigned32 interrupt_number)
 {
-
-  //      printk("recv_intr_cb\n");
 	int i =0;
-        cbstart[cbi] = ktime_get();
+
 	for (i = 0;  i<MAX_NUM_CHANNELS; i++) {
 		if (interrupt_number == local_recv_intr_no[i]) {
-//			printk("Remote recv interrupt for %d %d\n", i, interrupt_number);
+			//printk("Remote recv interrupt for %d %d\n", i, interrupt_number);
 			complete(&recv_intr_flag[i]);
 			break;
 		}
 	}
-        cbend[cbi] = ktime_get();
-         cbi++;
 	return 0;
 }
 
@@ -426,7 +416,6 @@ static send_wait * dq_send(int index)
 #else
 static void enq_send(send_wait *strc)
 {
-  //      printk("enq_send\n");
 	spin_lock(&send_q_mutex);
 	INIT_LIST_HEAD(&(strc->list));
 	list_add_tail(&(strc->list), &(send_wait_q.list));
@@ -436,8 +425,6 @@ static void enq_send(send_wait *strc)
 
 static send_wait * dq_send(void)
 {
-    //    printk("dq_send\n");
-
 	send_wait *tmp;
 	wait_for_completion(&send_q_empty);
 	spin_lock(&send_q_mutex);
@@ -456,13 +443,13 @@ static send_wait * dq_send(void)
 
 
 // Initialize callback table to null, set up control and data channels
-int __init initialize(void)
+int __init initialize()
 {
 	int status = 0, i = 0, j = 0; 
 	recv_data_t* recv_data;
 	struct sched_param param = {.sched_priority = 10};
 
-	printk(KERN_ALERT "MSG_LAYER: Initialization\n");
+	printk("MSG_LAYER: Initialization\n");
 
 #if SEND_QUEUE_POOL
 	for (i = 0; i<MAX_NUM_CHANNELS; i++) {
@@ -478,7 +465,7 @@ int __init initialize(void)
 #endif
 
 	for (i = 0; i<MAX_NUM_BUF; i++) {
-		send_buf[i].buff = vmalloc(SEG_SIZE);
+		send_buf[i].buff = vmalloc(segsize);
 		if (send_buf[i].buff == NULL) {
 			printk("************* Failed to allocate buffer pool **************\n");
 		}
@@ -487,7 +474,7 @@ int __init initialize(void)
 		send_buf[i].status = 0;
 		smp_wmb();
 
-		printk(KERN_EMERG "allocated send buffer   %p\n", send_buf[i].buff);
+		printk("allocated buffer %p\n", send_buf[i].buff);
 	}
 
 	sema_init(&pool_buf_cnt, MAX_NUM_BUF);
@@ -496,7 +483,7 @@ int __init initialize(void)
 #if TEST_MSG_LAYER
 
 	for (i = 0; i<MAX_NUM_BUF; i++) {
-		recv_buf[i].buff = vmalloc(SEG_SIZE);
+		recv_buf[i].buff = vmalloc(segsize);
 		if (recv_buf[i].buff == NULL) {
 			printk("************* Failed to allocate buffer pool **************\n");
 		}
@@ -504,7 +491,7 @@ int __init initialize(void)
 		recv_buf[i].is_free = 1;
 		smp_wmb();
 
-		printk("allocated recv buffer  %p\n", recv_buf[i].buff);
+		printk("allocated buffer %p\n", recv_buf[i].buff);
 	}
 
 	sema_init(&recv_buf_cnt, MAX_NUM_BUF);
@@ -634,25 +621,6 @@ ktime_t end[(NUM_MSGS*MAX_NUM_CHANNELS)+1];
 unsigned long long time[(NUM_MSGS*MAX_NUM_CHANNELS)+1];
 #else
 ktime_t start, end;
-ktime_t starts[25], ends[25];
-ktime_t rstart[25], rend[25];
-ktime_t tstart[25], tend[25];
-ktime_t istart[25], iend[25];
-ktime_t eqstart[25], eqend[25];
-ktime_t dqstart[25], dqend[25];
-ktime_t fstart[25], fend[25];
-ktime_t dstart[25], dend[25];
-ktime_t mcstart[25], mcend[25], triend[25], tristart[25], rcvstart[25], rcvend[25];
-static int ai=0;
-static int iai=0;
-static int aii=0;
-static int ei=0;
-static int di=0;
-static int fi=0;
-static int dqi=0;
-static int tri=0;
-static int mci=0;
-static int rri=0;
 static int time_started = 0;
 #endif
 
@@ -687,7 +655,7 @@ int test_thread(void* arg0)
 
 	msg = (struct test_msg_t *) vmalloc(sizeof(struct test_msg_t));
 	msg->hdr.type= PCN_KMSG_TYPE_SELFIE_TEST;
-	memset(msg->payload,'f',payload_size);
+	memset(msg->payload,'b',payload_size);
 
 #if !PROF_HISTOGRAM
 	if (time_started == 0) {
@@ -703,17 +671,12 @@ int test_thread(void* arg0)
 
 		//printk("start_time = %lld\n", ktime_to_ns(start[temp_count]));
 #endif
-		starts[i] = ktime_get();
-                pci_kmsg_send_long(1,(struct pcn_kmsg_long_message*)msg, payload_size);
+		pci_kmsg_send_long(1,(struct pcn_kmsg_long_message*)msg, payload_size);
 
-                ends[i] = ktime_get();
-
-
-
-		if (!(i%(NUM_MSGS/5))) {
+	/*if (!(i%(NUM_MSGS/5))) {
 			//printk("scheduling out\n");
 			msleep(1);
-		}
+		}*/
 	}
 
 	vfree(msg);
@@ -733,12 +696,11 @@ int send_thread(int arg0)
 	struct pcn_kmsg_message* pcn_msg;
 
 	channel_num = arg0;
-//	printk("In MSG LAYER send thread for channel %d\n", channel_num);
+	printk("In MSG LAYER send thread for channel %d\n", channel_num);
 
 	status = pcie_send_init(channel_num);
 	if (status != 0) {
 		printk("Failed to initialize pcie connection\n");
-                return;
 	}
 
 #if ENABLE_DMA
@@ -749,16 +711,13 @@ int send_thread(int arg0)
 #endif
 	
 	up(&send_connDone[channel_num]);
-//	printk("%s: INFO: Connection Done...PCN_SEND Thread\n", __func__);
+	printk("%s: INFO: Connection Done...PCN_SEND Thread\n", __func__);
 
 	while (1) {
 #if SEND_QUEUE_POOL
 		send_data = dq_send(channel_num);
 #else
-                dqstart[dqi] = ktime_get();
 		send_data = dq_send();
-                dqend[dqi] = ktime_get();
-                dqi++;
 #endif
 
 #if TEST_MSG_LAYER
@@ -768,20 +727,13 @@ int send_thread(int arg0)
 
 		if (send_data == NULL) {
 			printk("send queue is empty\n");
-			//continue;
-                        break;
+			continue;
 		}
 
 		pcn_msg = (struct pcn_kmsg_message*) send_data->msg;
-       
-               istart[aii] = ktime_get();                 
-  //             printk("wait for completion send_intr_cb\n");
-	       wait_for_completion(&send_intr_flag[channel_num]);
 
-               iend[aii]   = ktime_get();
+		wait_for_completion(&send_intr_flag[channel_num]);
 
-               aii++;
-               mcstart[mci] = ktime_get();
 #if ENABLE_DMA
 		memcpy(send_vaddr[channel_num], pcn_msg, pcn_msg->hdr.size);
 
@@ -795,18 +747,13 @@ int send_thread(int arg0)
 		wait_for_completion(&dma_complete[channel_num]);
 #else						
 		/*check whether remote is using the channel */
+//                printk("send msg content: %s\n", (*pcn_msg).payload[1]);
 		memcpy(send_remote_vaddr[channel_num], pcn_msg, pcn_msg->hdr.size);
 #endif
-                mcend[mci] = ktime_get();
-                mci++;
-              
-                tristart[tri] = ktime_get();  
+  //              printk("send triggered interupt number:  %d\n", remote_recv_intr_hdl[channel_num]);
 	        /* trigger the interrupt */
-    //           printk("send trigger interrupt\n");
 		status = sci_trigger_interrupt_flag(remote_recv_intr_hdl[channel_num],
 			                        NO_FLAGS);
-                triend[tri] = ktime_get();
-                tri++;
 		if (status != 0) {
 			printk("%s: ERROR: in sci_trigger_interrupt_flag: %d\n", __func__, status);
 		}
@@ -842,7 +789,7 @@ static int connection_handler_cnt = 0;
 int connection_handler(void* arg0)
 {
 	struct pcn_kmsg_message *pcn_msg, *temp;
-	int status = 0, i = 0, channel_num = 0, retry =0,  f=0;
+	int status = 0, i = 0, channel_num = 0, retry =0;
 	unsigned long long average = 0;
 	pcn_kmsg_cbftn ftn;
 	recv_data_t* thread_data;
@@ -856,7 +803,7 @@ int connection_handler(void* arg0)
 	channel_num = thread_data->channel_num;
 
 	msleep(100);
-//	printk("%s: INFO: Channel  %d %d\n", thread_data->channel_num, thread_data->is_worker);
+	printk("%s: INFO: Channel  %d %d\n", thread_data->channel_num, thread_data->is_worker);
 	if (thread_data->is_worker == 0) {
 		printk("%s: INFO: Initializing recv channel %d\n", __func__, channel_num);
 		status = pcie_recv_init(channel_num);
@@ -878,12 +825,7 @@ int connection_handler(void* arg0)
 		}
 
 		/* Wait on remote to complete using the channel */
-		tstart[ai] = ktime_get();
-  //              printk("recv wait for completion_intr_cb\n");
-                wait_for_completion(&recv_intr_flag[channel_num]);
-                tend[ai] = ktime_get();
-                  
-                ai++;
+		wait_for_completion(&recv_intr_flag[channel_num]);
 		/* Ajith :  the wait for completion will wake up only one thread on interrupt callback */
 
 #if TEST_MSG_LAYER
@@ -893,7 +835,7 @@ int connection_handler(void* arg0)
 
         connection_handler_cnt++;
         if (connection_handler_cnt > 1)
-    //    	printk("%s: ALERT: detected connection_handler_cnt %d\n", __func__, connection_handler_cnt);
+        	printk("%s: ALERT: detected connection_handler_cnt %d\n", __func__, connection_handler_cnt);
 		temp = (struct pcn_kmsg_message*)recv_vaddr[channel_num];
 		if (!temp)
 			printk("%s: ERROR: temp is zero\n", __func__);
@@ -902,8 +844,6 @@ int connection_handler(void* arg0)
 			printk("Receive message: %d (%s)\n", temp->hdr.type, msg_names[temp->hdr.type]);*/
 
 #if TEST_MSG_LAYER
-                rstart[iai] = ktime_get();
-      //          printk("down interrupt recv buf cnt\n");
 		down_interruptible(&recv_buf_cnt);
 do_retry:
 		for (i = 0; i<MAX_NUM_BUF; i++) {
@@ -926,8 +866,6 @@ do_retry:
 		}
 
 		pcn_msg = recv_buf[i].buff;
-                rend[iai] = ktime_get();
-                iai++;
 #else
 do_retry:
 		pcn_msg = (struct pcn_kmsg_message *) vmalloc(temp->hdr.size);
@@ -938,12 +876,11 @@ do_retry:
 			goto do_retry;
 		}
 #endif
-                rcvstart[rri] = ktime_get();
+
 		memcpy(pcn_msg, recv_vaddr[channel_num], temp->hdr.size);
-                rcvend[rri] = ktime_get();
-                rri++;
+   //             printk("recv msg: %s\n", (*pcn_msg).payload[0]);
 	       /* trigger the interrupt */
-        //        printk("recv trigger the interrupt\n");
+     //           printk("recv triggered interrupt number: %d\n", remote_send_intr_hdl[channel_num]);
 		status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num],
 		                                NO_FLAGS);
 		if (status != 0) {
@@ -1014,16 +951,12 @@ do_retry:
 		if (atomic_read(&exec_count) == (NUM_MSGS*MAX_NUM_CHANNELS)) {
 			end = ktime_get();
 
-			average = ktime_to_ns(ktime_sub(end,start));	
-                        printk("total time before for msg = %lld\n", average);	
-			average = (ktime_to_ns(ktime_sub(end,start)))/1000;	
-                        printk("total time for msg = %lld\n", average);	
+			average = (ktime_to_ns(ktime_sub(end,start)))/1000;		
 			average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
 
-			printk("Average time for sending msg = %lld  payload size = %d\n", average, paysize); 
+			printk("Average time for sending msg = %lld, payload size = %d\n", average, paysize); 
 
 		}
-
 #endif
 #endif /*TEST_MSG_LAYER*/ 
 	}
@@ -1078,9 +1011,9 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_long_message *lmsg
 	lmsg->hdr.from_cpu = my_cpu;
 	lmsg->hdr.size = (payload_size + sizeof(struct pcn_kmsg_hdr));
 
-	if ( lmsg->hdr.size > SEG_SIZE) {
+	if ( lmsg->hdr.size > segsize) {
 		printk("%s: ALERT: trying to send a message bigger than the supported size %d (%pS) %s\n",
-				__func__, (int)SEG_SIZE, __builtin_return_address(0), msg_names[lmsg->hdr.type]);
+				__func__, segsize, __builtin_return_address(0), msg_names[lmsg->hdr.type]);
 	}
 /*	if (lmsg->hdr.type != PCN_KMSG_TYPE_SCHED_PERIODIC)
 		printk("Send message: %d (%s) pid %d\n", lmsg->hdr.type, msg_names[lmsg->hdr.type], current->pid);*/
@@ -1116,12 +1049,8 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_long_message *lmsg
 		return -1;
 	}
 
-        dstart[di] = ktime_get();
-    //    printk("down interrrupt pool_buf_cnt\n");
 	down_interruptible(&pool_buf_cnt); // released in the sender thread, it blocks all possible other senders
-        dend[di]  = ktime_get();
-        di++;
-        fstart[fi] = ktime_get();
+
 do_retry:
 	for (i = 0; i<MAX_NUM_BUF; i++) {
 		if ( atomic_cmpxchg( ((atomic_t *) &send_buf[i].is_free), 1, 0) == 1 ) {
@@ -1145,13 +1074,12 @@ do_retry:
 		retry++;
 		goto do_retry;
        }
-       fend[fi] = ktime_get();
-        fi++;
+
 	send_data->assoc_buf = &send_buf[i];
 	send_data->assoc_buf->status = 0;
 	send_data->msg=send_buf[i].buff;
 
-	memset(send_buf[i].buff, 0, SEG_SIZE); // NOTE probably not needed
+	memset(send_buf[i].buff, 0, segsize); // NOTE probably not needed
 	memcpy(send_data->msg,lmsg,lmsg->hdr.size);
 	send_data->dst_cpu = dest_cpu;
 
@@ -1159,11 +1087,7 @@ do_retry:
 	channel_select = atomic_inc_return(&send_channel)%MAX_NUM_CHANNELS;
 	enq_send(send_data, channel_select);
 #else
-      //  printk("recv enq data\n");
-        eqstart[ei] = ktime_get(); 
 	enq_send(send_data);
-        eqend[ei] = ktime_get();
-        ei++;
 	send_data->assoc_buf->status = 1;
 #endif
 
@@ -1182,25 +1106,13 @@ static int pcie_send_init(int channel_num)
 	}
 
 	/* Query node ID */
-
-       do{
-
-            status = sci_query_adapter_number(local_adapter_number, Q_ADAPTER_NODE_ID,
-                                        NO_FLAGS, &value);
-
-                if (status != 0)
-                {
-                        msleep(1000);
-                        printk(" Send Error in sci_query_adapter_number: %d\n", status);
-                }
-                msleep(1000);
-                if (status == 0)
-                {
-                   printk(" adapter number = %d\n", value);
-                }
-        }
-        while (status != 0);
-
+	status = sci_query_adapter_number(local_adapter_number, Q_ADAPTER_NODE_ID,
+					NO_FLAGS, &value);
+	if (status != 0) {
+                printk(" Send Error in sci_create_segment: %d\n", status);
+        } else {
+		printk(" Send adapter number = %d\n", value);
+	}
 
 	local_segid = (value << 8) + TARGET_NODE + SEND_OFFSET + channel_num;
 	remote_segid = (TARGET_NODE << 8) + value + RECV_OFFSET + channel_num;
@@ -1209,7 +1121,7 @@ static int pcie_send_init(int channel_num)
 
 	/* Create a local segment with above ID */
 	status = sci_create_segment( send_binding[channel_num], module_id, local_segid,
-                   NO_FLAGS, SEG_SIZE, local_cbfunc, NULL, &local_send_seg_hdl[channel_num]);
+                   NO_FLAGS, segsize, local_cbfunc, NULL, &local_send_seg_hdl[channel_num]);
 	if (status != 0) {
 		printk("Send Error in sci_create_segment: %d\n", status);
 	}
@@ -1218,54 +1130,52 @@ static int pcie_send_init(int channel_num)
 					local_adapter_number,
                    			NO_FLAGS);
 	if (status != 0) {
-		printk(" Error in sci_export_segment: %d\n", status);
+		printk(" send Error in sci_export_segment: %d\n", status);
 	}
 
 	send_vaddr[channel_num] = (vkaddr_t *) sci_local_kernel_virtual_address (local_send_seg_hdl[channel_num]);
 	if (send_vaddr != NULL)
 	{
-		printk(" local segment kernel virtual address is: %x\n", send_vaddr[channel_num]);
+		printk(" local segment kernel virtual address is: %p\n", send_vaddr[channel_num]);
 	}
 
 	status = sci_set_local_segment_available (local_send_seg_hdl[channel_num],
                                  	local_adapter_number);
 	if (status != 0)
 	{
-		printk(" Error in sci_set_local_segment_available: %d\n", status);
+		printk(" send error in sci_set_local_segment_available: %d\n", status);
 	}
 
 	status = sci_probe_node(module_id, NO_FLAGS, TARGET_NODE,
                local_adapter_number, &send_report);
         if (status != 0)
         {
-                printk(" Error in sci_set_local_segment_available: %d\n", status);
+                printk(" send Error in sci_set_local_segment_available: %d\n", status);
         }
 	else
-		printk("probe status = %d\n", send_report);
+		printk("send probe status = %d\n", send_report);
 
 
 	/* Create and initialize iterrupt */
-      //  printk("Create and initialize iterrupt\n");
 	status = sci_allocate_interrupt_flag(send_binding[channel_num], local_adapter_number,
                                   0, NO_FLAGS, send_intr_cb ,
                                   NULL, &local_send_intr_hdl[channel_num]);
         if (status != 0)
         {
-                printk(" Local interrupt cannot be created %d\n", status);
+                printk(" send Local interrupt cannot be created %d\n", status);
         }
 
 	local_send_intr_no[channel_num] = sci_interrupt_number(local_send_intr_hdl[channel_num]);
-	printk("Local interrupt number = %d\n", local_send_intr_no);
+//	printk("Send Local interrupt number = %d\n", local_send_intr_no);
 
  
 	status = sci_is_local_segment_available(local_send_seg_hdl[channel_num],
 						local_adapter_number);
-	if (status != 0)
+	if (status == 0)
 	{
 		printk(" Local segment not available to connect to\n");
 	}
 
-        printk("writing to local memory %d\n", *send_vaddr);
 
 	do{
 		status = sci_connect_segment(send_binding[channel_num], TARGET_NODE, local_adapter_number,
@@ -1273,8 +1183,8 @@ static int pcie_send_init(int channel_num)
                     &remote_recv_seg_hdl[channel_num]);
 		if (status != 0)
 		{
-	                msleep(1000);
-			printk(" Send Error in sci_connect_segment: %d\n", status);
+			msleep(1000);
+			printk(" Error in sci_connect_segment: %d\n", status);
 		}
 		msleep(1000);
 	}
@@ -1284,7 +1194,7 @@ static int pcie_send_init(int channel_num)
 	send_connected_flag[channel_num] = 0;
 
 	status = sci_map_segment(remote_recv_seg_hdl[channel_num], NO_FLAGS,
-                0, SEG_SIZE, &send_map_handle[channel_num]);
+                0, segsize, &send_map_handle[channel_num]);
 	if (status != 0)
 	{
 		printk(" Error in sci_map_segment: %d\n", status);
@@ -1296,11 +1206,9 @@ static int pcie_send_init(int channel_num)
 		printk(" Remote virtual address: %x\n", send_remote_vaddr);
 	}
 
-	printk("Writing to remote address %d\n", send_remote_vaddr[channel_num]);
 	*send_remote_vaddr[channel_num] = local_send_intr_no[channel_num];
 
-	printk("After writing to remote\n");
-	printk("Remote memory value = %d\n", *send_remote_vaddr[channel_num]);
+//	printk("Remote memory value for send interrupt number = %d\n", *send_remote_vaddr[channel_num]);
 
 	while (*send_vaddr[channel_num] == 0)
 	{
@@ -1309,12 +1217,13 @@ static int pcie_send_init(int channel_num)
 
 	remote_recv_intr_no[channel_num] = *send_vaddr[channel_num];
 
+//	printk("send triggered interrupt number = %d\n", remote_recv_intr_no[channel_num]);
 	status = sci_connect_interrupt_flag(send_binding[channel_num], TARGET_NODE,
                                         local_adapter_number, remote_recv_intr_no[channel_num],
                                         NO_FLAGS, &remote_recv_intr_hdl[channel_num]);
         if (status != 0)
         {
-               	printk("Unable to connect to remote interrupt: %d\n", status);
+               	printk("send Unable to connect to remote interrupt: %d\n", status);
         }
 
 	return status;
@@ -1333,24 +1242,14 @@ static int pcie_recv_init(int channel_num)
 	}
 
 	/* Query node ID */
-
-        do{
-
-            status = sci_query_adapter_number(local_adapter_number, Q_ADAPTER_NODE_ID,
-                                        NO_FLAGS, &value);
-
-                if (status != 0)
-                {
-                        msleep(1000);
-                        printk(" Recv Error in sci_query_adapter_number: %d\n", status);
-                }
-                msleep(1000); 
-                if (status == 0)
-                {
-                   printk(" adapter number = %d\n", value);
-                }
+	status = sci_query_adapter_number(local_adapter_number, Q_ADAPTER_NODE_ID,
+					NO_FLAGS, &value);
+	if (status != 0)
+        {
+                printk("recv Error in sci_query_adapter_number: %d\n", status);
         }
-        while (status != 0);
+	else
+		printk("recv adapter number = %d\n", value);
 
 	local_segid = (value << 8) + TARGET_NODE + RECV_OFFSET + channel_num;
 	remote_segid = (TARGET_NODE << 8) + value + SEND_OFFSET + channel_num;
@@ -1359,10 +1258,10 @@ static int pcie_recv_init(int channel_num)
 
 	/* Create a local segment with above ID */
 	status = sci_create_segment( recv_binding[channel_num], module_id, local_segid,
-                   NO_FLAGS, SEG_SIZE, local_cbfunc, NULL, &local_recv_seg_hdl[channel_num]);
+                   NO_FLAGS, segsize, local_cbfunc, NULL, &local_recv_seg_hdl[channel_num]);
 	if (status != 0)
 	{
-		printk(" Error in sci_create_segment: %d\n", status);
+		printk(" Recv Error in sci_create_segment: %d\n", status);
 	}
 
 	status = sci_export_segment(local_recv_seg_hdl[channel_num], 
@@ -1370,7 +1269,7 @@ static int pcie_recv_init(int channel_num)
                    			NO_FLAGS);
 	if (status != 0)
 	{
-		printk(" Error in sci_export_segment: %d\n", status);
+		printk("recv Error in sci_export_segment: %d\n", status);
 	}
 
 	recv_vaddr[channel_num] = (vkaddr_t *) sci_local_kernel_virtual_address (local_recv_seg_hdl[channel_num]);
@@ -1383,38 +1282,37 @@ static int pcie_recv_init(int channel_num)
                                  	local_adapter_number);
 	if (status != 0)
 	{
-		printk(" Error in sci_set_local_segment_available: %d\n", status);
+		printk("Recv Error in sci_set_local_segment_available: %d\n", status);
 	}
 
 	status = sci_probe_node(module_id, NO_FLAGS, TARGET_NODE,
                local_adapter_number, &recv_report);
         if (status != 0)
         {
-                printk(" Error in sci_set_local_segment_available: %d\n", status);
+                printk(" recv Error in sci_set_local_segment_available: %d\n", status);
         }
 	else
-		printk("probe status = %d\n", recv_report);
+		printk("recv probe status = %d\n", recv_report);
 
 
 	/* Create and initialize iterrupt */
-        printk("recv Create and initialize iterrupt\n");
 	status = sci_allocate_interrupt_flag(recv_binding[channel_num], local_adapter_number,
                                   0, NO_FLAGS, recv_intr_cb ,
                                   NULL, &local_recv_intr_hdl[channel_num]);
         if (status != 0)
         {
-                printk(" Local interrupt cannot be created %d\n", status);
+                printk(" recv Local interrupt cannot be created %d\n", status);
         }
 
 	local_recv_intr_no[channel_num] = sci_interrupt_number(local_recv_intr_hdl[channel_num]);
-	printk("Local interrupt number = %d\n", local_recv_intr_no);
+	//printk("Recv Local interrupt number = %d\n", local_recv_intr_no[channel_num]);
 
  
 	status = sci_is_local_segment_available(local_recv_seg_hdl[channel_num],
 						local_adapter_number);
 	if (status != 0)
 	{
-		printk(" Local segment not available to connect to\n");
+		printk(" recv Local segment not available to connect to\n");
 	}
 
 	do{
@@ -1424,7 +1322,7 @@ static int pcie_recv_init(int channel_num)
 		if (status != 0)
 		{
 			msleep(1000);
-			printk(" Recv Error in sci_connect_segment: %d\n", status);
+			printk(" Recv  Error in sci_connect_segment: %d\n", status);
 		}
 		msleep(1000);
 	}
@@ -1434,10 +1332,10 @@ static int pcie_recv_init(int channel_num)
 	recv_connected_flag[channel_num] = 0;
 
 	status = sci_map_segment(remote_send_seg_hdl[channel_num], NO_FLAGS,
-                0, SEG_SIZE, &recv_map_handle[channel_num]);
+                0, segsize, &recv_map_handle[channel_num]);
 	if (status != 0)
 	{
-		printk(" Error in sci_map_segment: %d\n", status);
+		printk("recv Error in sci_map_segment: %d\n", status);
 	}
 
  	recv_remote_vaddr[channel_num] = sci_kernel_virtual_address_of_mapping(recv_map_handle[channel_num]);
@@ -1446,11 +1344,10 @@ static int pcie_recv_init(int channel_num)
 		printk(" Remote virtual address: %x\n", recv_remote_vaddr[channel_num]);
 	}
 
-	printk("Writing to remote address %d\n", recv_remote_vaddr[channel_num]);
+//	printk("Writing to remote address %p\n", recv_remote_vaddr[channel_num]);
 	*recv_remote_vaddr[channel_num] = local_recv_intr_no[channel_num];
 
-	printk("After writing to remote\n");
-	printk("Remote memory value = %d\n", *recv_remote_vaddr[channel_num]);
+//	printk(" Recv  interrupt number = %d\n", *recv_remote_vaddr[channel_num]);
 
 	while (*recv_vaddr[channel_num] == 0) {
 		msleep(100);
@@ -1458,11 +1355,12 @@ static int pcie_recv_init(int channel_num)
 
 	remote_send_intr_no[channel_num] = *recv_vaddr[channel_num];
 
+//	printk(" Recv triggered interrupt number = %d\n", remote_send_intr_no[channel_num]);
 	status = sci_connect_interrupt_flag(recv_binding[channel_num], TARGET_NODE,
                                         local_adapter_number, remote_send_intr_no[channel_num],
                                         NO_FLAGS, &remote_send_intr_hdl[channel_num]);
-        if (status != 0) {
-               	printk("Unable to connect to remote interrupt: %d\n", status);
+        if (status == 0) {
+               	printk("Recv Unable to connect to remote interrupt: %d\n", status);
         }
 
 	return status;
@@ -1576,7 +1474,7 @@ static int dma_init(int channel_num)
 	int status = 0;
 
 	status = sci_create_dma_queue (send_binding[channel_num], &dma_queue[channel_num], local_adapter_number,
-                 			10, SEG_SIZE, NO_FLAGS);
+                 			10, segsize, NO_FLAGS);
 	if (status != 0) {
 		printk(" Error in sci_create_dma_queue: %d\n", status);
 	}
@@ -1612,12 +1510,11 @@ static int dma_cleanup(int channel_num)
 
 
 
-//static void __exit unload(void)
-static void unload(void)
+static void __exit unload(void)
 {
-	int status = 0, i = 0, j = 0, f=0;
+	int status = 0, i = 0, j = 0;
 
-	printk(KERN_ALERT "Stopping kernel threads\n");
+	printk("Stopping kernel threads\n");
 
 	/* To move out of recv_queue*/
 	for (i = 0; i<MAX_NUM_CHANNELS; i++) {
@@ -1659,65 +1556,11 @@ static void unload(void)
 #endif
 
 	}
-         for (f =0; f<25; f++)
-                        {
-
-                          int  a = (ktime_to_ns(ktime_sub(ends[f],starts[f])))/1000;
-                          printk("send time for msg = %lld,  times: %d\n", a, f);
-
-
-                          a = (ktime_to_ns(ktime_sub(iend[f],istart[f])))/1000;
-                          printk("send wait complete internal time = %lld  round: %d\n", a, f);
-
-
-                          a = (ktime_to_ns(ktime_sub(tend[f],tstart[f])))/1000;
-                          printk("recv wait complete internal time = %lld  round: %d\n", a, f);
-
-
-                          a = (ktime_to_ns(ktime_sub(rend[f],rstart[f])))/1000;
-                          printk("recv wait interrupt internal time = %lld  round: %d\n", a, f);
-
-
-                          a = (ktime_to_ns(ktime_sub(eqend[f],eqstart[f])))/1000;
-                          printk("kmsg enqueue time for msg = %lld, round = %d\n", a, f);
-
-                          a = (ktime_to_ns(ktime_sub(fend[f], fstart[f])))/1000;
-                          printk("kmsg buffer time for msg = %lld, round = %d\n", a, f);
-
-                          a = (ktime_to_ns(ktime_sub(dend[f],dstart[f])))/1000;
-                          printk("kmsg down interrupt time for msg = %lld, round = %d\n", a, f);
-
-                          a = (ktime_to_ns(ktime_sub(mcend[f],mcstart[f])))/1000;
-                          printk("Send memory copy time for msg = %lld, round = %d\n", a, f);
-
-
-                          a = (ktime_to_ns(ktime_sub(triend[f],tristart[f])))/1000;
-                          printk("Send trigger interrupt time for msg = %lld, round = %d\n", a, f);
-
-                          a = (ktime_to_ns(ktime_sub(cbend[f],cbstart[f])))/1000;
-                          printk("rcv callback time for msg = %lld,  times: %d\n", a, f);
-                            
-                          a = (ktime_to_ns(ktime_sub(rcvend[f],rcvstart[f])))/1000;
-                          printk("rcv read memory time for msg = %lld,  times: %d\n", a, f);
- 
-                          a = (ktime_to_ns(ktime_sub(dqend[f],dqstart[f])))/1000;
-                          printk("Wait for data to send  time for msg = %lld,  times: %d\n", a, f);
-
-
-                        }
 
 	sci_terminate(module_id);	
 
-	printk(KERN_INFO "Successfully unloaded module\n");
+	printk("Successfully unloaded module\n");
 }
-//static int init(void)
-//{ printk(KERN_INFO "hello\n"); return 0; }
-//static void exit(void)
-//{printk(KERN_INFO "BYE\n"); }
-
-//module_init(init);
-//module_exit(exit);
-
 
 module_init(initialize);
 module_exit(unload);
