@@ -112,6 +112,10 @@ ktime_t ttrigstart[25], ttrigend[25];
 static int ttri=0;
 ktime_t dqstart[25], dqend[25];
 static int dqi=0;
+
+ktime_t eqstart[25], eqend[25];
+static int eqi=0;
+
 static int dqiflag=0;
 static int connection_handler(void* arg0);
 static int send_thread(int arg0);
@@ -813,7 +817,18 @@ int send_thread(int arg0)
 		atomic_inc(&send_count);
 
 		if (atomic_read(&send_count) == NUM_MSGS*MAX_NUM_CHANNELS)
-			printk("after send all messages\n");
+	        {
+                   printk("after send all messages\n");
+
+
+                   end = ktime_get();
+
+                  int  average = (ktime_to_ns(ktime_sub(end,start)))/1000;
+                        average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
+
+                  printk("Average time for sending side msg = %lld, payload size = %d\n", average, paysize);
+               }
+
 #endif
 
 		send_data->assoc_buf->is_free = 1;
@@ -1151,7 +1166,16 @@ do_retry:
 	channel_select = atomic_inc_return(&send_channel)%MAX_NUM_CHANNELS;
 	enq_send(send_data, channel_select);
 #else
+        if (eqi < 25)
+        {
+            eqstart[eqi]=ktime_get();
+        }
 	enq_send(send_data);
+        if (eqi<25)
+        {
+            eqend[eqi] = ktime_get();
+            eqi++;
+        }
 	send_data->assoc_buf->status = 1;
 #endif
 
@@ -1630,48 +1654,41 @@ static void __exit unload(void)
 
 
 
-            int average = (ktime_to_ns(ktime_sub(recvend[f],recvstart[f])))/1000;
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
+            int average = (ktime_to_ns(ktime_sub(recvend[f],recvstart[f])));
                  printk("wait for recv interrupt time = %lld us, round = %d\n", average, f+1);
 
 
 
                 average = (ktime_to_ns(ktime_sub(sendend[f],sendstart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                  printk("wait for send interrupt time = %lld ns, round = %d\n", average, f+1);
 
 
                 average = (ktime_to_ns(ktime_sub(writeend[f],writestart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                  printk("write data time = %lld ns, round = %d\n", average, f+1);
 
                 average = (ktime_to_ns(ktime_sub(readend[f],readstart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                 printk("read data time = %lld ns, round = %d\n", average, f+1);
                 
                 average = (ktime_to_ns(ktime_sub(pciend[f],pcistart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                 printk("pci msg data filled time = %lld ns, round = %d\n", average, f+1);
 				
 		average = (ktime_to_ns(ktime_sub(relend[f],relstart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                 printk("recv free buffer time = %lld ns, round = %d\n", average, f+1);
 				
 	        average = (ktime_to_ns(ktime_sub(rtrigend[f],rtrigstart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                 printk("recv trigger interrupt time = %lld ns, round = %d\n", average, f+1);
 				
 		average = (ktime_to_ns(ktime_sub(ttrigend[f],ttrigstart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                 printk("send trigger interrupt time = %lld ns, round = %d\n", average, f+1);
 				
 		average = (ktime_to_ns(ktime_sub(allrend[f],allrstart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                 printk("recv allocate buf time = %lld ns, round = %d\n", average, f+1);
 				
 		average = (ktime_to_ns(ktime_sub(dqend[f],dqstart[f])));
-                average = average/(NUM_MSGS*MAX_NUM_CHANNELS);
                 printk("dq data time = %lld ns, round = %d\n", average, f+1);
+
+                average = (ktime_to_ns(ktime_sub(eqend[f],eqstart[f])));
+                printk("eq data time = %lld ns, round = %d\n", average, f+1);
 
 
        }
