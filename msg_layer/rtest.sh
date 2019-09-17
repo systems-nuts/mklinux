@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 
@@ -11,15 +10,16 @@
 for i in 1 ; do
    echo $i
    echo "new loop"
-#for w in 64 128 256 512 1024 2048 4096 131072 262144 524288 1048576 2097152; do
-for w in 64 128 256 512 1024 2048 4096; do
+for w in 64 128 256 512 1024 2048 4096 8096 16384 32768 65536 131072 262144 524288 1048576 2097152; do
    echo "$w size"
-   echo "insmod msg_layer.ko paysize"=""$w""
-
-   insmod msg_layer.ko paysize"=""$w"
+   x=`expr $w + 200`
+   echo "$x segsize"
+   echo "insmod msg_layer.ko paysize"=""$w" segsize"=""$x""
+   insmod msg_layer.ko paysize"=""$w" segsize"=""$x"
    sleep 15
    rmmod msg_layer
    sleep 5
 done
 done
+
 
