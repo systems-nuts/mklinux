@@ -35,7 +35,7 @@
 #endif
 #define SEG_SIZE		2000
 #define SERVER 1
-#define CLIENT 1
+#define CLIENT 0
 
 
 
@@ -148,6 +148,7 @@ static int send_init(void)
 	int status = 0, value = 0;
 	unsigned int local_segid = 0, remote_segid = 0;
 
+        printk("send start initial\n");
 	status = sci_bind (&sci_resources_binding);
 	if (status != 0) {
 		printk(" Error in sci_bind: %d\n", status);
@@ -214,12 +215,12 @@ static int send_init(void)
         }
 
 	local_send_intr_no[0] = sci_interrupt_number(local_send_intr_hdl[0]);
-	printk("Local interrupt number = %d\n", local_send_intr_no);
+	printk("Local interrupt number = %d\n", local_send_intr_no[0]);
 
  
 	status = sci_is_local_segment_available(local_send_seg_hdl[0],
 						local_adapter_number);
-	if (status != 0)
+	if (status == 0)
 	{
 		printk(" Local segment not available to connect to\n");
 	}
@@ -420,7 +421,7 @@ static int recv_init(void)
  
 	status = sci_is_local_segment_available(local_recv_seg_hdl[0],
 						local_adapter_number);
-	if (status != 0)
+	if (status == 0)
 	{
 		printk(" Local segment not available to connect to\n");
 	}
