@@ -70,7 +70,7 @@ static int send_init(void);
 static int recv_init(void);
 static int send_cleanup(void);
 static int recv_cleanup(void);
-
+static int sb=0;
 
 int local_cbfunc (void *arg, sci_l_segment_handle_t local_segment_handle,
                         unsigned32 reason, unsigned32 source_node,
@@ -278,9 +278,8 @@ static int send_init(void)
 		status = sci_trigger_interrupt_flag(remote_recv_intr_hdl[0],
 			                        NO_FLAGS);
 		triend = ktime_get();
-		int sb = (ktime_to_ns(ktime_sub(triend,start)));		
+		 sb = (ktime_to_ns(ktime_sub(triend,start)));		
 			
-		printk(" time for trigger interrupt = %d ns\n", sb);
 		if (status != 0) {
 			printk("%s: ERROR: in sci_trigger_interrupt_flag: %d\n", __func__, status);
 		}
@@ -336,6 +335,7 @@ static int send_cleanup(void)
 		printk(" Error in sci_bind: %d\n", status);
 	}
 
+        printk(" time for trigger interrupt = %d ns\n", sb);
 	return status;
 }
 
@@ -522,6 +522,7 @@ static int recv_cleanup(void)
 		printk(" Error in sci_unbind: %d\n", status);
 	}
 
+ 
 	return status;
 }
 #endif
