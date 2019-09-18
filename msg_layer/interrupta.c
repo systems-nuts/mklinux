@@ -134,6 +134,7 @@ signed32 recv_intr_cb (unsigned32 local_adapter_number,
                        void *arg, unsigned32 interrupt_number)
 {
 	int i =0;
+        ktime_t rstart, rend;
        /* trigger the interrupt */
         
      /*  int status = sci_trigger_interrupt_flag(remote_send_intr_hdl[0],
@@ -141,7 +142,11 @@ signed32 recv_intr_cb (unsigned32 local_adapter_number,
 		if (status != 0) {
 		        printk("%s: ERROR: in sci_trigger_interrupt_flag: %d\n", status);
 		}*/
-       *recv_remote_vaddr[0] = 108; 
+       rstart =ktime_get();
+       *recv_remote_vaddr[0] = 108;
+       rend = ktime_get();
+          int average = (ktime_to_ns(ktime_sub(rend,rstart)));
+                 printk("time for write = %d ns%d\n", average); 
 	return 0;
 }
 #if SERVER
