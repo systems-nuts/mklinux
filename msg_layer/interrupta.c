@@ -286,10 +286,11 @@ static int send_init(void)
 			printk("%s: ERROR: in sci_trigger_interrupt_flag: %d\n", __func__, status);
 		}
                 int bs =0;
-                printk("sick \n"); 
+//                printk("sick \n"); 
                 while (*send_vaddr[0] != 108)
                 {
-                  msleep(1);
+  //                msleep(1);
+                   usleep_range(0,1);
                   bs++;
                 }
                 end = ktime_get();
