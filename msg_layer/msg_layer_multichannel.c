@@ -37,7 +37,7 @@
 #include "genif.h"
 
 /* Macro definitions */
-#define MAX_NUM_CHANNELS 	1
+#define MAX_NUM_CHANNELS 	6
 #define SEND_OFFSET		1
 #define RECV_OFFSET		(MAX_NUM_CHANNELS+SEND_OFFSET)
 #if CONFIG_ARM64
@@ -52,10 +52,10 @@
 
 #define ENABLE_DMA		0
 #define SEND_QUEUE_POOL		0
-
+#define CHANNEL                 1
 /* for debug */
 #define TEST_MSG_LAYER 		1
-#define TEST_SERVER		1
+#define TEST_SERVER		0
 
 typedef struct _pool_buffer{
 	char* buff;
@@ -101,13 +101,20 @@ static int recvi=0;
 ktime_t trigend[25], trigstart[25];
 static int trigi=0;
 
+ktime_t recvtrigend[25], recvtrigstart[25];
+static int recvtrigi=0;
+
 
 
 ktime_t readend[25], readstart[25];
 static int readi=0;
 
+
+static int recvindex=0;
+static int index=0;
 static int connection_handler(void* arg0);
 static int send_thread(int arg0);
+static int send_process(send_wait * send_data);
 
 /* PCI function declarations */
 static int pcie_send_init(int channel_num);
@@ -540,7 +547,7 @@ int __init initialize()
 		}
 	}  while (status == 0);
 
-	for (i = 0; i<MAX_NUM_CHANNELS; i++) {
+	for (i = 0; i<CHANNEL; i++) {
 		recv_data = kmalloc(sizeof(recv_data_t), GFP_KERNEL);
 		if (recv_data == NULL) {
 			printk("MSG_LAYER: Failed to allocate memory\n");
@@ -558,18 +565,28 @@ int __init initialize()
 
 		sched_setscheduler(handler[i], SCHED_FIFO, &param);
 		set_cpus_allowed_ptr(handler[i], cpumask_of(i));
+        
+		for (channel_num =0; channel_num < MAX_NUM_CHANNELS; channel_num++)
+        { 
+	        status = pcie_send_init(channel_num);
+	        if (status != 0) {
+		        printk("Failed to initialize pcie connection\n");
+	        }
 
-		sender_handler[i] = kthread_run(send_thread, i, "pcn_send");
-		if (sender_handler[i] < 0) {
-			printk(KERN_INFO "kthread_run failed! Messaging Layer not initialized\n");
-			return (long long int)sender_handler;
-		}
-
-		sched_setscheduler(sender_handler[i], SCHED_FIFO, &param);
-		set_cpus_allowed_ptr(sender_handler[i], cpumask_of(i%NR_CPUS));	
+#if ENABLE_DMA
+	        status = dma_init(channel_num);
+	        if (status != 0) {
+		        printk("Failed in dma_init: %d\n", status);
+	        }
+#endif
+	
+ 	        up(&send_connDone[channel_num]);
+	        printk("%s: INFO: Connection Done...PCN_SEND Thread\n", __func__);
+        }
+			
 	}
 
-	for (i = 0; i<MAX_NUM_CHANNELS; i++) {
+	for (i = 0; i<CHANNEL; i++) {
 		for (j = 0; j<(RECV_THREAD_POOL-1); j++) {
 
 			recv_data = kmalloc(sizeof(recv_data_t), GFP_KERNEL);
@@ -712,63 +729,23 @@ int test_thread(void* arg0)
 #endif /* TEST_MSG_LAYER */
 
 
-int send_thread(int arg0)
+int send_process(send_wait *send_data, int channel_num)
 {
-	int status = 0, channel_num = 0;
-	send_wait *send_data = NULL;
+	int status = 0;
+	
 	struct pcn_kmsg_message* pcn_msg;
 
-	channel_num = arg0;
-
-	status = pcie_send_init(channel_num);
-	if (status != 0) {
-		printk("Failed to initialize pcie connection\n");
-	}
-
-#if ENABLE_DMA
-	status = dma_init(channel_num);
-	if (status != 0) {
-		printk("Failed in dma_init: %d\n", status);
-	}
-#endif
 	
-	up(&send_connDone[channel_num]);
-	printk("%s: INFO: Connection Done...PCN_SEND Thread\n", __func__);
 
-	while (1) {
-#if SEND_QUEUE_POOL
-		send_data = dq_send(channel_num);
-#else
-                if (dqi < 25)
-                {
-                    dqstart[dqi] = ktime_get();
-                }
-		send_data = dq_send();
-                if (dqi < 25)
-                {
-                   dqend[dqi] = ktime_get();
-                }
-                dqi++;
-                
-#endif
 
 #if TEST_MSG_LAYER
 		if (atomic_read(&send_count) == NUM_MSGS*MAX_NUM_CHANNELS)
 			break;
 #endif
 
-		if (send_data == NULL) {
-			printk("send queue is empty\n");
-			continue;
-		}
 
 		pcn_msg = (struct pcn_kmsg_message*) send_data->msg;
-                #if !ENABLE_DMA
-                sendrstart[sendri] = ktime_get();
-		wait_for_completion(&send_intr_flag[channel_num]);
-                sendrend[sendri] = ktime_get();
-                sendri++;
-                #endif
+               
 #if ENABLE_DMA
                 eqstart[eqi] = ktime_get();
 		memcpy(send_vaddr[channel_num], pcn_msg, pcn_msg->hdr.size);
@@ -785,12 +762,10 @@ int send_thread(int arg0)
                 eqend[eqi] =ktime_get();
                 eqi++;
 #else						
-		/*check whether remote is using the channel */
-//                printk("send msg content: %s\n", (*pcn_msg).payload[0]);
+		
 		memcpy(send_remote_vaddr[channel_num], pcn_msg, pcn_msg->hdr.size);
 #endif
-  //              printk("send triggered interupt number:  %d\n", remote_recv_intr_hdl[channel_num]);
-	        /* trigger the interrupt */
+ 
 		trigstart[trigi] = ktime_get();
                 status = sci_trigger_interrupt_flag(remote_recv_intr_hdl[channel_num],
 			                        NO_FLAGS);
@@ -856,14 +831,18 @@ int connection_handler(void* arg0)
 	printk("%s: INFO: Channel  %d %d\n", __func__, thread_data->channel_num, thread_data->is_worker);
 	if (thread_data->is_worker == 0) {
 		printk("%s: INFO: Initializing recv channel %d\n", __func__, channel_num);
-		status = pcie_recv_init(channel_num);
-		if (status != 0) {
-			printk("%s: ALERT: Failed to initialize pcie connection\n", __func__);
+	        for (channel_num = 0; channel_num < MAX_NUM_CHANNELS, channel_num++)
+                {
+          	    status = pcie_recv_init(channel_num);
+		    if (status != 0) {
+			printk("%s: ALERT: Failed to initialize pcie connection in the channel %d\n", __func__, channel_num);
 			return;
-		}
+		    }
 
-		up(&recv_connDone[channel_num]);
-		printk("%s: INFO Receive connection successfully completed..!!\n", __func__);
+		    up(&recv_connDone[channel_num]);
+		    printk("%s: INFO Receive connection successfully completed..!! in the channel  %d\n", __func__, channel_num);
+                 }
+            
 
 	}
 	kfree(thread_data);
@@ -935,6 +914,7 @@ do_retry:
                 readstart[readi] = ktime_get();
                 #endif
 		memcpy(pcn_msg, recv_vaddr[channel_num], temp->hdr.size);
+		        recvindex = recvindex%MAX_NUM_CHANNELS;
                 #if !TEST_SERVER
                 readend[readi] = ktime_get();
                 readi++;
@@ -942,15 +922,19 @@ do_retry:
    //             printk("recv msg: %s\n", (*pcn_msg).payload[0]);
 	       /* trigger the interrupt */
      //            printk("recv triggered interrupt number: %d\n", remote_send_intr_hdl[channel_num]);
-	       #if !ENABLE_DMA
+	        #if !ENABLE_DMA
                 #if !TEST_SERVER
-                trigstart[trigi] = ktime_get();
+                recvtrigstart[trigi] = ktime_get();
                 #endif
-             	status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num],
+				if (recvindex ==0 )
+             	{
+					status = sci_trigger_interrupt_flag(remote_send_intr_hdl[0],
 		                                NO_FLAGS);
+				}
+				recvindex++;
                 #if !TEST_SERVER
-                trigend[trigi] = ktime_get();
-                trigi++;
+                recvtrigend[trigi] = ktime_get();
+                recvtrigi++;
                 #endif
                 #endif
 		if (status != 0) {
@@ -1150,13 +1134,22 @@ do_retry:
 	memset(send_buf[i].buff, 0, segsize); // NOTE probably not needed
 	memcpy(send_data->msg,lmsg,lmsg->hdr.size);
 	send_data->dst_cpu = dest_cpu;
-
+    index = index%MAX_NUM_CHANNELS;
 #if SEND_QUEUE_POOL
 	channel_select = atomic_inc_return(&send_channel)%MAX_NUM_CHANNELS;
 	enq_send(send_data, channel_select);
 #else
-	enq_send(send_data);
-	send_data->assoc_buf->status = 1;
+	 #if !ENABLE_DMA
+     if (index ==0)
+     {
+		 sendrstart[sendri] = ktime_get();
+		wait_for_completion(&send_intr_flag[0]);
+        sendrend[sendri] = ktime_get();
+        sendri++;
+	 }
+     #endif
+	 send_process(send_data, index);
+	 index++;
 #endif
 
 	return 1;
@@ -1662,7 +1655,7 @@ static void __exit unload(void)
 
 
 
-                 average = (ktime_to_ns(ktime_sub(trigend[f], trigstart[f])));
+                 average = (ktime_to_ns(ktime_sub(recvtrigend[f], recvtrigstart[f])));
 
                  printk("recv trigger interrupt time  = %lld ns, payload size = %d  rount: %d\n", average, paysize, f);
 
