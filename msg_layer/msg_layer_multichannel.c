@@ -108,13 +108,14 @@ static int recvtrigi=0;
 
 ktime_t readend[25], readstart[25];
 static int readi=0;
-
+static int n=0;
+static int xa=0;
 
 static int recvindex=0;
 static int index=0;
 static int connection_handler(void* arg0);
 static int send_thread(int arg0);
-static int send_process(send_wait * send_data);
+static int send_process(send_wait * send_data, int channel_num);
 
 /* PCI function declarations */
 static int pcie_send_init(int channel_num);
@@ -175,6 +176,8 @@ int subuser_id[MAX_NUM_CHANNELS] = {1};
 struct completion dma_complete[MAX_NUM_CHANNELS];
 
 #endif
+
+struct completion dma_completion;
 
 struct completion send_intr_flag[MAX_NUM_CHANNELS]; 
 struct completion recv_intr_flag[MAX_NUM_CHANNELS]; 
@@ -313,6 +316,14 @@ char *msg_names[] = {
 	"SCHED_PERIODIC"
 };
 
+int ciradd(int num)
+{
+
+   return (num +1) == MAX_NUM_CHANNELS ? 0 : num+1;
+}
+
+
+
 /* PCIe Callback functions */
 int local_cbfunc (void *arg, sci_l_segment_handle_t local_segment_handle,
 			unsigned32 reason, unsigned32 source_node, 
@@ -402,7 +413,10 @@ int dma_cb(void IN *arg, dis_dma_status_t dmastatus)
 	for (i = 0; i<MAX_NUM_CHANNELS; i++) {
 		if (dma_queue[i] == *temp) {
 			//printk("DMA transfer status = %d %lx %lx\n", dmastatus, *temp, dma_queue[i]);
-			complete(&dma_complete[i]);
+			complete(&dma_complete[i]);   
+                        complete(&dma_completion); 
+        		xa =i;                
+                     
 		}
 	}
 
@@ -471,7 +485,7 @@ static send_wait * dq_send(void)
 // Initialize callback table to null, set up control and data channels
 int __init initialize()
 {
-	int status = 0, i = 0, j = 0; 
+	int status = 0, i = 0, j = 0, channel_num=0; 
 	recv_data_t* recv_data;
 	struct sched_param param = {.sched_priority = 10};
 
@@ -537,6 +551,7 @@ int __init initialize()
 		complete(&send_intr_flag[i]);	
 	}
 
+        init_completion(&dma_completion);
 	/* Initilaize the adapter */
 	do {
 		status = sci_initialize (module_id);
@@ -740,7 +755,7 @@ int send_process(send_wait *send_data, int channel_num)
 
 #if TEST_MSG_LAYER
 		if (atomic_read(&send_count) == NUM_MSGS*MAX_NUM_CHANNELS)
-			break;
+			return  0;
 #endif
 
 
@@ -795,7 +810,7 @@ int send_process(send_wait *send_data, int channel_num)
 		up(&pool_buf_cnt);
 
 		kfree(send_data);
-	}
+	
 		
 #if TEST_MSG_LAYER
 	while (1) {
@@ -831,7 +846,7 @@ int connection_handler(void* arg0)
 	printk("%s: INFO: Channel  %d %d\n", __func__, thread_data->channel_num, thread_data->is_worker);
 	if (thread_data->is_worker == 0) {
 		printk("%s: INFO: Initializing recv channel %d\n", __func__, channel_num);
-	        for (channel_num = 0; channel_num < MAX_NUM_CHANNELS, channel_num++)
+	        for (channel_num = 0; channel_num < MAX_NUM_CHANNELS; channel_num++)
                 {
           	    status = pcie_recv_init(channel_num);
 		    if (status != 0) {
@@ -1134,21 +1149,36 @@ do_retry:
 	memset(send_buf[i].buff, 0, segsize); // NOTE probably not needed
 	memcpy(send_data->msg,lmsg,lmsg->hdr.size);
 	send_data->dst_cpu = dest_cpu;
-    index = index%MAX_NUM_CHANNELS;
+        index = index%MAX_NUM_CHANNELS;
+
+        if (n < MAX_NUM_CHANNELS)
+        {
+            n++;
+        }
+        else
+        {
+            
+            wait_for_completion(&dma_completion);
+            send_process(send_data, xa);
+            n--;
+            
+        }
+  
+        if (n >0)
+        {
+            
+            send_process(send_data, index);
+            n--;
+        }
+        else
+        {
+            printk("No data to send\n");
+        }
+        
 #if SEND_QUEUE_POOL
 	channel_select = atomic_inc_return(&send_channel)%MAX_NUM_CHANNELS;
 	enq_send(send_data, channel_select);
 #else
-	 #if !ENABLE_DMA
-     if (index ==0)
-     {
-		 sendrstart[sendri] = ktime_get();
-		wait_for_completion(&send_intr_flag[0]);
-        sendrend[sendri] = ktime_get();
-        sendri++;
-	 }
-     #endif
-	 send_process(send_data, index);
 	 index++;
 #endif
 
