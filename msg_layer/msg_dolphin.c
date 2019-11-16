@@ -37,6 +37,7 @@
 
 #include "genif.h"
 
+//#define ENABLE_DMA 1
 //#define TEST_MSG_LAYER 1
 //#define TEST_MSG_LAYER_SERVER 0
 /* Macro definitions */
@@ -47,9 +48,9 @@
 #define TARGET_NODE		((my_nid == 0) ? 8 : 4)
 
 #define NO_FLAGS		0
-#define SEG_SIZE		70000	// to support max msg size 65536
+#define SEG_SIZE		70000   // to support max msg size 65536
 #define MAX_NUM_BUF		20
-#define RECV_THREAD_POOL	1
+#define RECV_THREAD_POOL	2
 
 #define SEND_QUEUE_POOL		0
 
@@ -73,7 +74,9 @@ typedef struct _recv_data {
 	int is_worker;
 } recv_data_t;
 
-extern int _init_RemoteCPUMask(void);
+
+ void pci_kmsg_done(struct pcn_kmsg_message *msg);
+
 
 static int connection_handler(void *arg0);
 //static int send_thread(void *arg0);
@@ -167,9 +170,9 @@ sci_r_interrupt_handle_t remote_send_intr_hdl[MAX_NUM_CHANNELS] = {NULL};
 sci_r_interrupt_handle_t remote_recv_intr_hdl[MAX_NUM_CHANNELS] = {NULL};
 
 static int __init initialize(void);
-int pci_kmsg_send_long(unsigned int dest_cpu,
+int pci_kmsg_send_long(int dest_cpu,
 		       struct pcn_kmsg_message *lmsg,
-		       unsigned int payload_size);
+		       size_t payload_size);
 
 #ifdef TEST_MSG_LAYER
 pcn_kmsg_cbftn pcn_kmsg_cbftns[PCN_KMSG_TYPE_MAX];
@@ -207,6 +210,12 @@ struct task_struct *test_handler;
 
 pcn_kmsg_cbftn handle_selfie_test(struct pcn_kmsg_message *inc_msg);
 #endif
+
+void pci_kmsg_done(struct pcn_kmsg_message  *msg)
+{
+      kfree(msg);
+      //printk(" x86 free rec msg buffer\n");
+}
 
 
 char *msg_names[] = {
@@ -350,8 +359,8 @@ signed32 send_intr_cb(unsigned32 local_adapter_number,
 
 	for (i = 0; i < MAX_NUM_CHANNELS; i++) {
 		if (interrupt_number == local_send_intr_no[i]) {
-			printk("Remote send interrupt for %d %d\n",
-			       i, interrupt_number);
+	//		printk("Remote send interrupt for %d %d\n",
+	//		       i, interrupt_number);
 			complete(&send_intr_flag[i]);
 			break;
 		}
@@ -366,8 +375,8 @@ signed32 recv_intr_cb(unsigned32 local_adapter_number,
 
 	for (i = 0; i < MAX_NUM_CHANNELS; i++) {
 		if (interrupt_number == local_recv_intr_no[i]) {
-			printk("Remote recv interrupt for %d %d\n",
-			       i, interrupt_number);
+	//		printk("Remote recv interrupt for %d %d\n",
+	//		       i, interrupt_number);
 			complete(&recv_intr_flag[i]);
 			break;
 		}
@@ -427,20 +436,12 @@ static send_wait *dq_send(int index)
 #endif
 struct pcn_kmsg_transport transport_dolphin = {
         .name = "dolphin",
-   //     .features = PCN_KMSG_FEATURE_RDMA,
 
-  //      .get = rdma_kmsg_get,
-  //      .put = rdma_kmsg_put,
-  //      .stat = rdma_kmsg_stat,
 
           .send = pci_kmsg_send_long,
           .post = pci_kmsg_send_long,
-  //      .done = rdma_kmsg_done,
+          .done = pci_kmsg_done,
 
-  //      .pin_rdma_buffer = rdma_kmsg_pin_rdma_buffer,
-  //      .unpin_rdma_buffer = rdma_kmsg_unpin_rdma_buffer,
-  //      .rdma_write = rdma_kmsg_write,
-  //      .rdma_read = rdma_kmsg_read,
 };
 
 
@@ -478,7 +479,6 @@ int __init initialize(void)
 	init_completion(&(send_q_empty));
 #endif
 
-	sema_init(&pool_buf_cnt, MAX_NUM_BUF);
 
 #ifdef TEST_MSG_LAYER
 	for (i = 0; i < MAX_NUM_BUF; i++) {
@@ -579,7 +579,7 @@ int __init initialize(void)
 	set_popcorn_node_online(!my_nid, true);
 
         int fc = MAX_NUM_NODES;
-        printk("fc k:%d\n", fc);
+//        printk("fc k:%d\n", fc);
         broadcast_my_node_info(MAX_NUM_NODES);
 //	notify_my_node_info(!my_nid);
 
@@ -729,8 +729,10 @@ int connection_handler(void *arg0)
 
 
 do_retry:
-		pcn_msg = kmalloc(temp->header.size + sizeof(struct pcn_kmsg_hdr) ,GFP_ATOMIC);
-		if (pcn_msg == NULL) {
+		pcn_msg = kmalloc(PCN_KMSG_SIZE(temp->header.size) ,GFP_ATOMIC);
+//		pcn_msg = kmalloc(temp->header.size + sizeof(struct pcn_kmsg_hdr) ,GFP_ATOMIC);
+		//pcn_msg = vmalloc(temp->header.size + sizeof(struct pcn_kmsg_hdr));
+                if (pcn_msg == NULL) {
 			if (!(retry % 1000))
 				printk(KERN_ERR "%s: ERROR: Failed to allocate recv buffer size %ld\n",
 				       __func__, temp->header.size + sizeof(struct pcn_kmsg_hdr));
@@ -738,28 +740,8 @@ do_retry:
 			goto do_retry;
 		}
 
-		memcpy(pcn_msg, recv_vaddr[channel_num], temp->header.size + sizeof(struct pcn_kmsg_hdr));
-
-                printk("recv content size : %d\n", temp->header.size);
-                printk("pcn msg type: %d\n", pcn_msg->header.type);
-                //n = temp->header.size/64;
-               /* for(m=0; m<n; m++)
-                {
-                    for(j=0; j< 64; j++)
-                    {
-                        printk("recv content : %c,   round:%d\n",pcn_msg->payload[j+m*64],  m);
-                    }
-                }*/
-
-          //          for(j=0; j< temp->header.size; j++)
-                    {
-        //                printk("X86 recv content : %c, \n",pcn_msg->payload[j]);
-                    }
-
-                   for(j=0; j< temp->header.size; j++)
-                    {
-                        printk("ARM recv content : %c, \n",pcn_msg->payload[j]);
-                    }
+               memcpy(pcn_msg, recv_vaddr[channel_num], PCN_KMSG_SIZE(temp->header.size));
+//		memcpy(pcn_msg, recv_vaddr[channel_num], temp->header.size + sizeof(struct pcn_kmsg_hdr));
 
 		/* trigger the interrupt */
 		status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num], NO_FLAGS);
@@ -812,14 +794,13 @@ int pcn_kmsg_unregister_callback(enum pcn_kmsg_type type)
 }
 #endif
 
-int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_message *lmsg, unsigned int payload_size)
+int pci_kmsg_send_long(int dest_cpu, struct pcn_kmsg_message *lmsg, size_t payload_size)
 {
-	int channel_num = 0, ret, x=0;
+	int channel_num = 0, ret, x=0, status=0;
 	struct pcn_kmsg_message *pcn_msg = NULL;
 	pcn_kmsg_cbftn ftn;
 
      
-        printk("ARM send data\n");
 	if (pcn_connection_status() != PCN_CONN_CONNECTED) {
 		printk(KERN_ERR "PCN_CONNECTION is not yet established\n");
 		return -1;
@@ -828,10 +809,6 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_message *lmsg, uns
 	lmsg->header.from_nid = my_nid;
 	lmsg->header.size = payload_size;
 
-  //      for (x =0; x < payload_size; x++)
-    //    {
-             printk("ARM send msg type: %d\n", lmsg->header.type);
-      //  }
 
 
 	if (lmsg->header.size > SEG_SIZE) {
@@ -839,13 +816,6 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_message *lmsg, uns
 		       __func__, (int)SEG_SIZE, __builtin_return_address(0),
 		       msg_names[lmsg->header.type]);
 	}
-
-	/*
-	if (lmsg->header.type != PCN_KMSG_TYPE_SCHED_PERIODIC)
-		printk(KERN_INFO "Send message: %d (%s) pid %d\n",
-		       lmsg->header.type, msg_names[lmsg->header.type],
-		       current->pid);
-	*/
 
 #ifndef TEST_MSG_LAYER
 	if (dest_cpu == my_nid) {
@@ -874,14 +844,14 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_message *lmsg, uns
 #endif
 
 	pcn_msg = lmsg;
-	down(&pool_buf_cnt);
 
 	// Only one can send. Tirggered by INT.
 	wait_for_completion(&send_intr_flag[channel_num]);
 
 #ifdef ENABLE_DMA
-        memcpy(send_vaddr[channel_num], pcn_msg, pcn_msg->header.size);
+        //memcpy(send_vaddr[channel_num], pcn_msg, (pcn_msg->header.size) + sizeof(struct pcn_kmsg_hdr));
 
+        memcpy(send_remote_vaddr[channel_num], pcn_msg, PCN_KMSG_SIZE(pcn_msg->header.size));
         status = dis_start_dma_transfer(subuser_id[channel_num],
                         send_vaddr[channel_num],
                         local_io[channel_num],
@@ -897,14 +867,11 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_message *lmsg, uns
         wait_for_completion(&dma_complete[channel_num]);
 #else
     /*check whether remote is using the channel */
-    memcpy(send_remote_vaddr[channel_num], pcn_msg, (pcn_msg->header.size) + sizeof(struct pcn_kmsg_hdr));
+    memcpy(send_remote_vaddr[channel_num], pcn_msg, PCN_KMSG_SIZE(pcn_msg->header.size));
+    //memcpy(send_remote_vaddr[channel_num], pcn_msg, (pcn_msg->header.size) + sizeof(struct pcn_kmsg_hdr));
 #endif
 
 
-         for (x =0; x < pcn_msg->header.size; x++)
-        {
-            printk("ARM send msg content:  %d\n", pcn_msg->payload[x]);
-        }
 
 	/* trigger the interrupt */
 	ret = sci_trigger_interrupt_flag(remote_recv_intr_hdl[channel_num],
@@ -913,10 +880,8 @@ int pci_kmsg_send_long(unsigned int dest_cpu, struct pcn_kmsg_message *lmsg, uns
 		printk(KERN_ERR"%s: ERROR: in sci_trigger_interrupt_flag: %d\n",
 														   __func__, ret);
 
-	smp_wmb();
-	up(&pool_buf_cnt);
 
-	return 1;
+	return 0;
 }
 
 
@@ -1278,7 +1243,7 @@ static int dma_init(int channel_num)
 {
 	int status = 0;
 
-	status = sci_create_dma_queue(send_binding[channel_num]
+	status = sci_create_dma_queue(send_binding[channel_num],
 				      &dma_queue[channel_num],
 				      local_adapter_number, 10, SEG_SIZE,
 				      NO_FLAGS);
@@ -1363,3 +1328,4 @@ static void __exit unload(void)
 module_init(initialize);
 module_exit(unload);
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Harry Wei < wwang88@stevens.edu");
