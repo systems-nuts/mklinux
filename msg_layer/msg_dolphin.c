@@ -39,9 +39,9 @@
 
 //#define ENABLE_DMA 1
 //#define TEST_MSG_LAYER 1
-//#define TEST_MSG_LAYER_SERVER 0
+//#define TEST_MSG_LAYER_SERVER 2
 /* Macro definitions */
-#define MAX_NUM_CHANNELS	1
+#define MAX_NUM_CHANNELS	2
 #define SEND_OFFSET		1
 #define RECV_OFFSET		(MAX_NUM_CHANNELS+SEND_OFFSET)
 
@@ -730,9 +730,7 @@ int connection_handler(void *arg0)
 
 do_retry:
 		pcn_msg = kmalloc(PCN_KMSG_SIZE(temp->header.size) ,GFP_ATOMIC);
-//		pcn_msg = kmalloc(temp->header.size + sizeof(struct pcn_kmsg_hdr) ,GFP_ATOMIC);
-		//pcn_msg = vmalloc(temp->header.size + sizeof(struct pcn_kmsg_hdr));
-                if (pcn_msg == NULL) {
+                if (unlikely(!pcn_msg)) {
 			if (!(retry % 1000))
 				printk(KERN_ERR "%s: ERROR: Failed to allocate recv buffer size %ld\n",
 				       __func__, temp->header.size + sizeof(struct pcn_kmsg_hdr));
@@ -741,7 +739,6 @@ do_retry:
 		}
 
                memcpy(pcn_msg, recv_vaddr[channel_num], PCN_KMSG_SIZE(temp->header.size));
-//		memcpy(pcn_msg, recv_vaddr[channel_num], temp->header.size + sizeof(struct pcn_kmsg_hdr));
 
 		/* trigger the interrupt */
 		status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num], NO_FLAGS);
