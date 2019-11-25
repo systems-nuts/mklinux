@@ -781,7 +781,7 @@ do_retry:
 
 //               memcpy(pcn_msg, recv_vaddr[channel_num], PCN_KMSG_SIZE(temp->header.size));
                 cbuffer * tmp = (cbuffer *)recv_vaddr[channel_num];
-                if (is_buffer_empty(tmp))
+                while (is_buffer_empty(tmp))
                  msleep(10);
                 cbuffer_get (tmp, pcn_msg);
 
@@ -911,7 +911,7 @@ int pci_kmsg_send_long(int dest_cpu, struct pcn_kmsg_message *lmsg, size_t paylo
     cbuffer *tmp = (cbuffer *) send_remote_vaddr[channel_num];
 
     
-    if (is_buffer_full)
+    while (is_buffer_full)
     {
 
        msleep(10);
