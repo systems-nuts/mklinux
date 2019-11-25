@@ -48,7 +48,7 @@
 #define TARGET_NODE		((my_nid == 0) ? 8 : 4)
 
 #define NO_FLAGS		0
-#define SEG_SIZE		70000   // to support max msg size 65536
+#define SEG_SIZE		14000000   // to support max msg size 65536
 #define MAX_NUM_BUF		20
 #define RECV_THREAD_POOL	2
 
@@ -73,6 +73,17 @@ typedef struct _recv_data {
 	int channel_num;
 	int is_worker;
 } recv_data_t;
+
+// Ring buffer
+
+#define RINGSIZE 128
+typedef struct cbuffer {
+     struct pcn_kmsg_message buffer[RINGSIZE];
+     int head;
+     int tail;
+    
+}cbuffer;
+
 
 
  void pci_kmsg_done(struct pcn_kmsg_message *msg);
@@ -211,10 +222,50 @@ struct task_struct *test_handler;
 pcn_kmsg_cbftn handle_selfie_test(struct pcn_kmsg_message *inc_msg);
 #endif
 
+bool is_buffer_empty(cbuffer * ptr)
+{
+    return (ptr->head == ptr->tail);
+}
+
+bool is_buffer_full(cbuffer *ptr)
+{
+    return ((ptr->head + 1) == (ptr->tail));
+}
+
+int cbuffer_put(cbuffer *ptr,  struct pcn_kmsg_message  *msg)
+{
+     int next;
+     next = ptr->head + 1;   // next is where the head will point to after write
+     if (next >= RINGSIZE)
+        next=0;
+   
+      ptr->buffer[ptr->head] = *msg;
+      ptr->head = next;
+      return 0;           // return 0 to indicate successful push
+}
+
+
+int cbuffer_get(cbuffer *ptr,   struct pcn_kmsg_message *msg)
+{
+
+      int next;
+      
+      next = ptr->tail + 1;   // next is where tail will point to after read
+
+      if (next >= RINGSIZE)
+         next =0;
+
+      *msg = ptr->buffer[ptr->tail]; // read data
+      ptr->tail = next;            // tail to next offset
+     return 0;
+}
+
+
+
+
 void pci_kmsg_done(struct pcn_kmsg_message  *msg)
 {
       kfree(msg);
-      //printk(" x86 free rec msg buffer\n");
 }
 
 
@@ -578,11 +629,7 @@ int __init initialize(void)
 	set_popcorn_node_online(my_nid, true);
 	set_popcorn_node_online(!my_nid, true);
 
-        int fc = MAX_NUM_NODES;
-//        printk("fc k:%d\n", fc);
         broadcast_my_node_info(MAX_NUM_NODES);
-//	notify_my_node_info(!my_nid);
-
 	printk(KERN_INFO "\n\n\n");
 	printk(KERN_INFO "-----------------------------------\n");
 	printk(KERN_INFO "Popcorn Messaging Layer Initialized\n");
@@ -676,7 +723,6 @@ int test_thread(void *arg0)
 
 #endif /* TEST_MSG_LAYER */
 
-static int connection_handler_cnt;
 int connection_handler(void *arg0)
 {
 	struct pcn_kmsg_message *pcn_msg, *temp;
@@ -718,16 +764,11 @@ int connection_handler(void *arg0)
 		/* Ajith :  the wait for completion will wake up only one thread on interrupt callback */
 
 
-		connection_handler_cnt++;
-		if (connection_handler_cnt > 1)
-			printk(KERN_ALERT "%s: ALERT: detected connection_handler_cnt %d\n",
-				   __func__, connection_handler_cnt);
-
 		temp = (struct pcn_kmsg_message *)recv_vaddr[channel_num];
-		if (!temp)
-			printk(KERN_ERR"%s: ERROR: temp is zero\n", __func__);
-
-
+                if(unlikely(!temp))
+                { 
+		    printk(KERN_ERR"%s: ERROR: temp is zero\n", __func__);
+                }
 do_retry:
 		pcn_msg = kmalloc(PCN_KMSG_SIZE(temp->header.size) ,GFP_ATOMIC);
                 if (unlikely(!pcn_msg)) {
@@ -738,16 +779,19 @@ do_retry:
 			goto do_retry;
 		}
 
-               memcpy(pcn_msg, recv_vaddr[channel_num], PCN_KMSG_SIZE(temp->header.size));
+//               memcpy(pcn_msg, recv_vaddr[channel_num], PCN_KMSG_SIZE(temp->header.size));
+                cbuffer * tmp = (cbuffer *)recv_vaddr[channel_num];
+                if (is_buffer_empty(tmp))
+                 msleep(10);
+                cbuffer_get (tmp, pcn_msg);
+
 
 		/* trigger the interrupt */
-		status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num], NO_FLAGS);
-		if (status != 0) {
-			printk(KERN_ERR "%s: ERROR: in sci_trigger_interrupt_flag: %d\n",
-			       __func__, status);
-		}
-		/* safe to release the control here */
-		connection_handler_cnt--;
+//		status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num], NO_FLAGS);
+//		if (status != 0) {
+//			printk(KERN_ERR "%s: ERROR: in sci_trigger_interrupt_flag: %d\n",
+//			       __func__, status);
+//		}
                 pcn_kmsg_process(pcn_msg);
 
 
@@ -846,7 +890,6 @@ int pci_kmsg_send_long(int dest_cpu, struct pcn_kmsg_message *lmsg, size_t paylo
 	wait_for_completion(&send_intr_flag[channel_num]);
 
 #ifdef ENABLE_DMA
-        //memcpy(send_vaddr[channel_num], pcn_msg, (pcn_msg->header.size) + sizeof(struct pcn_kmsg_hdr));
 
         memcpy(send_remote_vaddr[channel_num], pcn_msg, PCN_KMSG_SIZE(pcn_msg->header.size));
         status = dis_start_dma_transfer(subuser_id[channel_num],
@@ -864,18 +907,31 @@ int pci_kmsg_send_long(int dest_cpu, struct pcn_kmsg_message *lmsg, size_t paylo
         wait_for_completion(&dma_complete[channel_num]);
 #else
     /*check whether remote is using the channel */
-    memcpy(send_remote_vaddr[channel_num], pcn_msg, PCN_KMSG_SIZE(pcn_msg->header.size));
-    //memcpy(send_remote_vaddr[channel_num], pcn_msg, (pcn_msg->header.size) + sizeof(struct pcn_kmsg_hdr));
+   // memcpy(send_remote_vaddr[channel_num], pcn_msg, PCN_KMSG_SIZE(pcn_msg->header.size));
+    cbuffer *tmp = (cbuffer *) send_remote_vaddr[channel_num];
+
+    
+    if (is_buffer_full)
+    {
+
+       msleep(10);
+    }
+
+    cbuffer_put(tmp, pcn_msg);
+
+
+
+
 #endif
 
 
 
 	/* trigger the interrupt */
-	ret = sci_trigger_interrupt_flag(remote_recv_intr_hdl[channel_num],
-																	NO_FLAGS);
-	if (ret != 0)
-		printk(KERN_ERR"%s: ERROR: in sci_trigger_interrupt_flag: %d\n",
-														   __func__, ret);
+//	ret = sci_trigger_interrupt_flag(remote_recv_intr_hdl[channel_num],
+		//															NO_FLAGS);
+//	if (ret != 0)
+//		printk(KERN_ERR"%s: ERROR: in sci_trigger_interrupt_flag: %d\n",
+		//												   __func__, ret);
 
 
 	return 0;
