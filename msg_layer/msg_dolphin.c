@@ -84,6 +84,7 @@ typedef struct cbuffer {
     
 }cbuffer;
 
+spinlock_t get_mutex, put_mutex;
 
 
  void pci_kmsg_done(struct pcn_kmsg_message *msg);
@@ -235,12 +236,14 @@ bool is_buffer_full(cbuffer *ptr)
 int cbuffer_put(cbuffer *ptr,  struct pcn_kmsg_message  *msg)
 {
      int next;
+     spin_lock(&put_mutex);
      next = ptr->head + 1;   // next is where the head will point to after write
      if (next >= RINGSIZE)
         next=0;
    
       ptr->buffer[ptr->head] = *msg;
       ptr->head = next;
+      spin_lock(&put_mutex);
       return 0;           // return 0 to indicate successful push
 }
 
@@ -249,7 +252,7 @@ int cbuffer_get(cbuffer *ptr,   struct pcn_kmsg_message *msg)
 {
 
       int next;
-      
+      spin_lock(&get_mutex); 
       next = ptr->tail + 1;   // next is where tail will point to after read
 
       if (next >= RINGSIZE)
@@ -257,6 +260,7 @@ int cbuffer_get(cbuffer *ptr,   struct pcn_kmsg_message *msg)
 
       *msg = ptr->buffer[ptr->tail]; // read data
       ptr->tail = next;            // tail to next offset
+      spin_unlock(&get_mutex);
      return 0;
 }
 
@@ -759,9 +763,6 @@ int connection_handler(void *arg0)
 			return 0;
 		}
 
-		/* Wait on remote to complete using the channel */
-		wait_for_completion(&recv_intr_flag[channel_num]);
-		/* Ajith :  the wait for completion will wake up only one thread on interrupt callback */
 
 
 		temp = (struct pcn_kmsg_message *)recv_vaddr[channel_num];
@@ -779,19 +780,12 @@ do_retry:
 			goto do_retry;
 		}
 
-//               memcpy(pcn_msg, recv_vaddr[channel_num], PCN_KMSG_SIZE(temp->header.size));
                 cbuffer * tmp = (cbuffer *)recv_vaddr[channel_num];
                 while (is_buffer_empty(tmp))
-                 msleep(10);
+                 msleep(5);
                 cbuffer_get (tmp, pcn_msg);
 
 
-		/* trigger the interrupt */
-//		status = sci_trigger_interrupt_flag(remote_send_intr_hdl[channel_num], NO_FLAGS);
-//		if (status != 0) {
-//			printk(KERN_ERR "%s: ERROR: in sci_trigger_interrupt_flag: %d\n",
-//			       __func__, status);
-//		}
                 pcn_kmsg_process(pcn_msg);
 
 
@@ -904,7 +898,6 @@ int pci_kmsg_send_long(int dest_cpu, struct pcn_kmsg_message *lmsg, size_t paylo
             printk(KERN_ERR "Error in dis_start_dma_transfer: %d\n",
                    status);
 
-        wait_for_completion(&dma_complete[channel_num]);
 #else
     /*check whether remote is using the channel */
    // memcpy(send_remote_vaddr[channel_num], pcn_msg, PCN_KMSG_SIZE(pcn_msg->header.size));
