@@ -880,8 +880,6 @@ int pci_kmsg_send_long(int dest_cpu, struct pcn_kmsg_message *lmsg, size_t paylo
 
 	pcn_msg = lmsg;
 
-	// Only one can send. Tirggered by INT.
-	wait_for_completion(&send_intr_flag[channel_num]);
 
 #ifdef ENABLE_DMA
 
@@ -907,7 +905,7 @@ int pci_kmsg_send_long(int dest_cpu, struct pcn_kmsg_message *lmsg, size_t paylo
     while (is_buffer_full)
     {
 
-       msleep(10);
+       msleep(5);
     }
 
     cbuffer_put(tmp, pcn_msg);
